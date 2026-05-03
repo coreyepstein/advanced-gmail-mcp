@@ -1,6 +1,8 @@
 import { google } from 'googleapis';
 import type { gmail_v1 } from 'googleapis';
 import type { Auth } from 'googleapis';
+import { randomBytes } from 'node:crypto';
+import { marked } from 'marked';
 import { type AccountConfig, resolveAccount } from '../config.js';
 import { getAuthClient } from './auth.js';
 import type {
@@ -238,24 +240,63 @@ interface MimeOptions {
 }
 
 /**
+ * Render a markdown body to HTML for the text/html part of multipart sends.
+ * marked is invoked synchronously (no async extensions registered) so we
+ * cast through unknown to silence the union return type.
+ */
+function renderMarkdownToHtml(body: string): string {
+  const rendered = marked.parse(body, { async: false }) as unknown as string;
+  return `<!DOCTYPE html><html><body>${rendered}</body></html>`;
+}
+
+/**
  * Build an RFC 2822 message and encode as base64url for the Gmail API.
+ *
+ * Default behaviour (is_html omitted or false): treat the body as Markdown
+ * and emit multipart/alternative with both a text/plain part (the body
+ * verbatim, no hard-wrapping) and a text/html part rendered via marked.
+ * This matches what Gmail's web composer produces and lets modern clients
+ * reflow paragraphs while keeping a sensible plaintext fallback for old
+ * clients.
+ *
+ * is_html=true: treat the body as already-rendered HTML and emit a single
+ * text/html part. Use this when the caller has its own HTML composition.
  */
 function buildRawMessage(opts: MimeOptions): string {
-  const lines: string[] = [];
+  const headers: string[] = [];
 
-  if (opts.from) lines.push(`From: ${opts.from}`);
-  lines.push(`To: ${opts.to}`);
-  if (opts.cc) lines.push(`Cc: ${opts.cc}`);
-  if (opts.bcc) lines.push(`Bcc: ${opts.bcc}`);
-  lines.push(`Subject: ${opts.subject}`);
-  if (opts.in_reply_to) lines.push(`In-Reply-To: ${opts.in_reply_to}`);
-  if (opts.references) lines.push(`References: ${opts.references}`);
-  lines.push(`MIME-Version: 1.0`);
-  lines.push(`Content-Type: ${opts.is_html ? 'text/html' : 'text/plain'}; charset="UTF-8"`);
-  lines.push(''); // blank line separates headers from body
-  lines.push(opts.body);
+  if (opts.from) headers.push(`From: ${opts.from}`);
+  headers.push(`To: ${opts.to}`);
+  if (opts.cc) headers.push(`Cc: ${opts.cc}`);
+  if (opts.bcc) headers.push(`Bcc: ${opts.bcc}`);
+  headers.push(`Subject: ${opts.subject}`);
+  if (opts.in_reply_to) headers.push(`In-Reply-To: ${opts.in_reply_to}`);
+  if (opts.references) headers.push(`References: ${opts.references}`);
+  headers.push(`MIME-Version: 1.0`);
 
-  const raw = lines.join('\r\n');
+  const sections: string[] = [];
+
+  if (opts.is_html) {
+    headers.push(`Content-Type: text/html; charset="UTF-8"`);
+    sections.push(...headers, '', opts.body);
+  } else {
+    const boundary = `----=_Part_${randomBytes(12).toString('hex')}`;
+    headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+    sections.push(...headers, '');
+    sections.push(`--${boundary}`);
+    sections.push(`Content-Type: text/plain; charset="UTF-8"`);
+    sections.push(`Content-Transfer-Encoding: 8bit`);
+    sections.push('');
+    sections.push(opts.body);
+    sections.push(`--${boundary}`);
+    sections.push(`Content-Type: text/html; charset="UTF-8"`);
+    sections.push(`Content-Transfer-Encoding: 8bit`);
+    sections.push('');
+    sections.push(renderMarkdownToHtml(opts.body));
+    sections.push(`--${boundary}--`);
+  }
+
+  const raw = sections.join('\r\n');
   return Buffer.from(raw).toString('base64url');
 }
 
