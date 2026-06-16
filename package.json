@@ -8,7 +8,8 @@
     "auth:check": "tsx src/auth.ts --check",
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "tsx test/thread-bcc.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

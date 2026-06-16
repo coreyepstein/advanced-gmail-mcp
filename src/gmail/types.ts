@@ -50,6 +50,7 @@ export interface ThreadMessage {
   from: string;
   to: string;
   cc: string;
+  bcc: string;
   subject: string;
   date: string;
   body_text: string;

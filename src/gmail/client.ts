@@ -179,8 +179,10 @@ function toEmailSummary(msg: gmail_v1.Schema$Message): EmailSummary {
 
 /**
  * Parse a Gmail API message into an EmailFull.
+ *
+ * Exported for unit testing (pure function: Gmail message -> EmailFull).
  */
-function toEmailFull(msg: gmail_v1.Schema$Message): EmailFull {
+export function toEmailFull(msg: gmail_v1.Schema$Message): EmailFull {
   const headers = msg.payload?.headers || [];
   const { html, text } = msg.payload ? extractBody(msg.payload) : { html: '', text: '' };
   const attachments = msg.payload ? extractAttachments(msg.payload) : [];
@@ -203,8 +205,10 @@ function toEmailFull(msg: gmail_v1.Schema$Message): EmailFull {
 
 /**
  * Parse a Gmail API message into a ThreadMessage (lighter than EmailFull).
+ *
+ * Exported for unit testing (pure function: Gmail message -> ThreadMessage).
  */
-function toThreadMessage(msg: gmail_v1.Schema$Message): ThreadMessage {
+export function toThreadMessage(msg: gmail_v1.Schema$Message): ThreadMessage {
   const headers = msg.payload?.headers || [];
   const { text } = msg.payload ? extractBody(msg.payload) : { text: '' };
 
@@ -213,6 +217,12 @@ function toThreadMessage(msg: gmail_v1.Schema$Message): ThreadMessage {
     from: extractHeader(headers, 'From'),
     to: extractHeader(headers, 'To'),
     cc: extractHeader(headers, 'Cc'),
+    // Bcc is only present on the account owner's OWN sent copy of a message
+    // (the mail system strips Bcc from delivered copies). Surfacing it here
+    // brings get_thread to parity with read_email (toEmailFull) so an agent can
+    // see the full recipient set on a thread instead of inferring from To/Cc
+    // alone (DEV-1774 / feedback_ef1163a2).
+    bcc: extractHeader(headers, 'Bcc'),
     subject: extractHeader(headers, 'Subject'),
     date: extractHeader(headers, 'Date'),
     body_text: text,
