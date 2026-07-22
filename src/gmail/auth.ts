@@ -10,6 +10,7 @@ import {
   getCredentialsPath,
 } from '../config.js';
 import { readStoredToken, writeStoredToken } from './token-store.js';
+import { classifyGmailError, systemErrorCode } from './errors.js';
 import type { StoredToken } from './types.js';
 
 /** Preserve the existing grant request during this stability repair. */
@@ -24,6 +25,7 @@ const CALLBACK_PATH = '/oauth2callback';
 const LOOPBACK_HOST = '127.0.0.1';
 const DEFAULT_REDIRECT_URI = `http://${LOOPBACK_HOST}${CALLBACK_PATH}`;
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const PRIVATE_FILE_MODE = 0o600;
 
 export interface OAuthClientCredentials {
@@ -60,7 +62,7 @@ export type TokenWriter = (
 
 interface GmailProfileClientLike {
   users: {
-    getProfile(options: { userId: string }): Promise<{
+    getProfile(options: { userId: string }, requestOptions?: { timeout?: number }): Promise<{
       data: { emailAddress?: string | null };
     }>;
   };
@@ -89,6 +91,7 @@ export interface AuthFlowDependencies {
   timeoutMs?: number;
   signalSource?: SignalSourceLike;
   createState?: () => string;
+  requestTimeoutMs?: number;
 }
 
 export type AuthHealthCategory =
@@ -121,6 +124,29 @@ export interface AuthHealthReport {
   exitCode: 0 | 1;
 }
 
+export interface AuthHealthEnvelope extends AuthHealthReport {
+  schemaVersion: 1;
+  error?: {
+    category: 'configuration_error';
+    message: string;
+  };
+}
+
+export function createAuthHealthEnvelope(report: AuthHealthReport): AuthHealthEnvelope {
+  return { schemaVersion: 1, ...report };
+}
+
+export function createAuthHealthFailure(error: unknown): AuthHealthEnvelope {
+  const message = error instanceof Error ? error.message : 'Gmail health setup failed.';
+  return {
+    schemaVersion: 1,
+    accounts: [],
+    healthy: false,
+    exitCode: 1,
+    error: { category: 'configuration_error', message },
+  };
+}
+
 export interface AuthHealthDependencies {
   getAccounts?: () => AccountConfig[];
   loadCredentials?: () => OAuthClientCredentials;
@@ -132,6 +158,7 @@ export interface AuthHealthDependencies {
   readToken?: (account: AccountConfig) => StoredToken | null;
   writeToken?: TokenWriter;
   log?: (message: string) => void;
+  requestTimeoutMs?: number;
 }
 
 function isPosixModeSupported(): boolean {
@@ -188,11 +215,12 @@ function defaultCreateOAuthClient(
   credentials: OAuthClientCredentials,
   redirectUri: string,
 ): OAuthClientLike {
-  return new google.auth.OAuth2(
-    credentials.client_id,
-    credentials.client_secret,
+  return new google.auth.OAuth2({
+    clientId: credentials.client_id,
+    clientSecret: credentials.client_secret,
     redirectUri,
-  ) as unknown as OAuthClientLike;
+    transporterOptions: { timeout: DEFAULT_REQUEST_TIMEOUT_MS },
+  }) as unknown as OAuthClientLike;
 }
 
 function defaultCreateGmailClient(oauthClient: OAuthClientLike): GmailProfileClientLike {
@@ -214,6 +242,7 @@ function getDependencies(overrides: AuthFlowDependencies): Required<AuthFlowDepe
     timeoutMs: overrides.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     signalSource: overrides.signalSource ?? process,
     createState: overrides.createState ?? (() => randomBytes(32).toString('base64url')),
+    requestTimeoutMs: overrides.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
   };
 }
 
@@ -246,41 +275,18 @@ function stateMatches(expected: string, actual: string | null): boolean {
     && timingSafeEqual(expectedBytes, actualBytes);
 }
 
-function errorStatus(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const candidate = error as {
-    code?: unknown;
-    response?: { status?: unknown };
-  };
-  const status = candidate.code ?? candidate.response?.status;
-  return typeof status === 'number' ? status : undefined;
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const candidate = error as {
-    response?: { data?: { error?: unknown } };
-    message?: unknown;
-  };
-  const providerCode = candidate.response?.data?.error;
-  if (typeof providerCode === 'string') return providerCode;
-  if (typeof candidate.message === 'string' && candidate.message.includes('invalid_grant')) {
-    return 'invalid_grant';
-  }
-  return undefined;
-}
-
 function requiresAuthorization(error: unknown): boolean {
-  return errorStatus(error) === 401 || errorCode(error) === 'invalid_grant';
+  return classifyGmailError(error).category === 'reauthorization_required';
 }
 
 async function verifyProfile(
   account: AccountConfig,
   oauthClient: OAuthClientLike,
   createGmailClient: AuthFlowDependencies['createGmailClient'],
+  requestTimeoutMs: number,
 ): Promise<void> {
   const gmail = createGmailClient!(oauthClient);
-  const profile = await gmail.users.getProfile({ userId: 'me' });
+  const profile = await gmail.users.getProfile({ userId: 'me' }, { timeout: requestTimeoutMs });
   const actualEmail = profile.data.emailAddress;
   if (typeof actualEmail !== 'string' || !sameEmail(actualEmail, account.email)) {
     throw new Error(
@@ -382,16 +388,23 @@ export async function authenticateAccount(
   const dependencies = getDependencies(dependencyOverrides);
   const credentials = dependencies.loadCredentials();
   const previousToken = dependencies.readToken(account);
+  let previousRefreshIsUsable = true;
 
   if (!options.forceConsent && previousToken?.refresh_token) {
     const existingClient = dependencies.createOAuthClient(credentials, DEFAULT_REDIRECT_URI);
     existingClient.setCredentials(previousToken);
     try {
-      await verifyProfile(account, existingClient, dependencies.createGmailClient);
+      await verifyProfile(
+        account,
+        existingClient,
+        dependencies.createGmailClient,
+        dependencies.requestTimeoutMs,
+      );
       dependencies.log(`Already authenticated: ${account.email} (${account.alias})`);
       return;
     } catch (error) {
       if (!requiresAuthorization(error)) throw error;
+      previousRefreshIsUsable = false;
     }
   }
 
@@ -442,12 +455,18 @@ export async function authenticateAccount(
       const { tokens } = await oauthClient.getToken({ code, codeVerifier });
       if (settled) return;
       oauthClient.setCredentials(tokens);
-      await verifyProfile(account, oauthClient, dependencies.createGmailClient);
+      await verifyProfile(
+        account,
+        oauthClient,
+        dependencies.createGmailClient,
+        dependencies.requestTimeoutMs,
+      );
       if (settled) return;
 
       const hasReturnedRefresh = typeof tokens.refresh_token === 'string'
         && tokens.refresh_token.length > 0;
       const mayUseStoredRefresh = !options.forceConsent
+        && previousRefreshIsUsable
         && typeof previousToken?.refresh_token === 'string'
         && previousToken.refresh_token.length > 0;
       if (!hasReturnedRefresh && !mayUseStoredRefresh) {
@@ -539,11 +558,12 @@ function defaultCreateHealthOAuthClient(
   credentials: OAuthClientCredentials,
   redirectUri: string,
 ): HealthOAuthClientLike {
-  return new google.auth.OAuth2(
-    credentials.client_id,
-    credentials.client_secret,
+  return new google.auth.OAuth2({
+    clientId: credentials.client_id,
+    clientSecret: credentials.client_secret,
     redirectUri,
-  ) as unknown as HealthOAuthClientLike;
+    transporterOptions: { timeout: DEFAULT_REQUEST_TIMEOUT_MS },
+  }) as unknown as HealthOAuthClientLike;
 }
 
 function defaultCreateHealthGmailClient(
@@ -555,54 +575,9 @@ function defaultCreateHealthGmailClient(
   }) as unknown as GmailProfileClientLike;
 }
 
-function safeErrorRecord(error: unknown): Record<string, unknown> | null {
-  return typeof error === 'object' && error !== null
-    ? error as Record<string, unknown>
-    : null;
-}
-
-function healthProviderDetails(error: unknown): {
-  status?: number;
-  reason?: string;
-  message: string;
-  systemCode?: string;
-} {
-  const errorRecord = safeErrorRecord(error);
-  const response = safeErrorRecord(errorRecord?.response);
-  const data = safeErrorRecord(response?.data);
-  const providerError = data?.error;
-  const providerRecord = safeErrorRecord(providerError);
-  const reasons: unknown[] = [
-    typeof providerError === 'string' ? providerError : undefined,
-    providerRecord?.reason,
-    providerRecord?.status,
-  ];
-  if (Array.isArray(providerRecord?.errors)) {
-    reasons.push(...providerRecord.errors.map(item => safeErrorRecord(item)?.reason));
-  }
-  if (Array.isArray(data?.errors)) {
-    reasons.push(...data.errors.map(item => safeErrorRecord(item)?.reason));
-  }
-
-  const statusCandidate = typeof errorRecord?.code === 'number'
-    ? errorRecord.code
-    : response?.status;
-  const messageCandidate = typeof providerRecord?.message === 'string'
-    ? providerRecord.message
-    : error instanceof Error ? error.message : '';
-  return {
-    status: typeof statusCandidate === 'number' ? statusCandidate : undefined,
-    reason: reasons.find((value): value is string => typeof value === 'string'),
-    message: messageCandidate.toLowerCase(),
-    systemCode: typeof errorRecord?.code === 'string' ? errorRecord.code : undefined,
-  };
-}
-
 function classifyHealthError(error: unknown): AuthHealthCategory {
-  const details = healthProviderDetails(error);
-  const reason = details.reason?.toLowerCase();
-
-  if (details.systemCode === 'EACCES' || details.systemCode === 'EPERM') {
+  const code = systemErrorCode(error);
+  if (code === 'EACCES' || code === 'EPERM') {
     return 'local_permission';
   }
   if (/invalid token file|invalid oauth credential json/i.test(
@@ -610,38 +585,22 @@ function classifyHealthError(error: unknown): AuthHealthCategory {
   )) {
     return 'corrupt_token';
   }
-  if (details.status === 401 || reason === 'invalid_grant'
-      || details.message.includes('invalid_grant')) {
-    return 'reauthorization_required';
+  return classifyGmailError(error).category;
+}
+
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(Object.assign(new Error('Google request timed out.'), { code: 'ETIMEDOUT' }));
+    }, timeoutMs);
+    timeout.unref();
+  });
+  try {
+    return await Promise.race([operation, deadline]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
-  if (reason === 'insufficientpermissions' || reason === 'insufficient_scope'
-      || details.message.includes('insufficient authentication scopes')) {
-    return 'insufficient_scope';
-  }
-  if (reason === 'domainpolicy') return 'domain_policy';
-  if (details.status === 429 || reason === 'ratelimitexceeded'
-      || reason === 'userratelimitexceeded') {
-    return 'rate_limit';
-  }
-  if (reason === 'quotaexceeded' || reason === 'dailylimitexceeded'
-      || reason === 'dailylimitexceededunreg') {
-    return 'quota';
-  }
-  if (details.status !== undefined && details.status >= 500 && details.status <= 599) {
-    return 'transient';
-  }
-  if (details.systemCode && [
-    'ECONNRESET',
-    'ECONNREFUSED',
-    'EHOSTUNREACH',
-    'ENETUNREACH',
-    'ENOTFOUND',
-    'ETIMEDOUT',
-  ].includes(details.systemCode)) {
-    return 'network';
-  }
-  if (details.status === 403) return 'forbidden';
-  return 'unknown';
 }
 
 function healthMessage(category: AuthHealthCategory, alias: string): string {
@@ -699,9 +658,12 @@ async function checkOneAccount(
 
     // Do not use getAccessToken(): it may accept a cached access token. This
     // explicit exchange proves that the durable refresh token still works.
-    await oauthClient.refreshAccessToken();
+    await withTimeout(oauthClient.refreshAccessToken(), dependencies.requestTimeoutMs);
     const gmail = dependencies.createGmailClient(oauthClient);
-    const profile = await gmail.users.getProfile({ userId: 'me' });
+    const profile = await withTimeout(
+      gmail.users.getProfile({ userId: 'me' }, { timeout: dependencies.requestTimeoutMs }),
+      dependencies.requestTimeoutMs,
+    );
     const actualEmail = profile.data.emailAddress;
     if (typeof actualEmail !== 'string' || !sameEmail(actualEmail, account.email)) {
       return resultFor(account, 'wrong_account');
@@ -724,13 +686,33 @@ export async function checkAuthStatus(
     readToken: dependencyOverrides.readToken ?? readStoredToken,
     writeToken: dependencyOverrides.writeToken ?? writeStoredToken,
     log: dependencyOverrides.log ?? console.log,
+    requestTimeoutMs: dependencyOverrides.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
   };
   const accounts = dependencies.getAccounts();
   const results: AccountAuthHealth[] = [];
+  let cachedCredentials: OAuthClientCredentials | undefined;
+  let credentialFailure: { error: unknown } | undefined;
+  let credentialsLoaded = false;
+  const loadCredentialsOnce = (): OAuthClientCredentials => {
+    if (!credentialsLoaded) {
+      credentialsLoaded = true;
+      try {
+        cachedCredentials = dependencies.loadCredentials();
+      } catch (error) {
+        credentialFailure = { error };
+      }
+    }
+    if (credentialFailure) throw credentialFailure.error;
+    return cachedCredentials!;
+  };
+  const checkDependencies: Required<AuthHealthDependencies> = {
+    ...dependencies,
+    loadCredentials: loadCredentialsOnce,
+  };
 
   dependencies.log('Account Status:');
   for (const account of accounts) {
-    const result = await checkOneAccount(account, dependencies);
+    const result = await checkOneAccount(account, checkDependencies);
     results.push(result);
     dependencies.log(
       `${result.healthy ? '+' : '-'} ${result.alias} ${result.email} `

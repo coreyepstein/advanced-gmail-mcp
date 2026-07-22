@@ -8,7 +8,7 @@ test('check_auth_health exposes the same read-only all-account report', async ()
   let name = '';
   let handler: (() => Promise<unknown>) | undefined;
   const server = {
-    tool(toolName: string, _description: string, toolHandler: () => Promise<unknown>) {
+    registerTool(toolName: string, _config: unknown, toolHandler: () => Promise<unknown>) {
       name = toolName;
       handler = toolHandler;
     },
@@ -25,12 +25,14 @@ test('check_auth_health exposes the same read-only all-account report', async ()
     exitCode: 0 as const,
   };
 
-  registerCheckAuthHealth(server, async () => report);
+  let invalidations = 0;
+  registerCheckAuthHealth(server, async () => report, () => { invalidations += 1; });
 
   assert.equal(name, 'check_auth_health');
   assert.ok(handler);
   const result = await handler!() as {
     content: Array<{ type: string; text: string }>;
+    structuredContent: Record<string, unknown>;
     isError?: boolean;
   };
   assert.equal(result.isError, undefined);
@@ -38,12 +40,14 @@ test('check_auth_health exposes the same read-only all-account report', async ()
     schemaVersion: 1,
     ...report,
   });
+  assert.deepEqual(result.structuredContent, { schemaVersion: 1, ...report });
+  assert.equal(invalidations, 1);
 });
 
 test('check_auth_health is an MCP error when any configured account is unhealthy', async () => {
   let handler: (() => Promise<unknown>) | undefined;
   const server = {
-    tool(_name: string, _description: string, toolHandler: () => Promise<unknown>) {
+    registerTool(_name: string, _config: unknown, toolHandler: () => Promise<unknown>) {
       handler = toolHandler;
     },
   } as unknown as McpServer;
@@ -63,4 +67,31 @@ test('check_auth_health is an MCP error when any configured account is unhealthy
   const result = await handler!() as { isError?: boolean };
 
   assert.equal(result.isError, true);
+});
+
+test('check_auth_health returns a versioned configuration error when setup throws', async () => {
+  let handler: (() => Promise<unknown>) | undefined;
+  const server = {
+    registerTool(_name: string, _config: unknown, toolHandler: () => Promise<unknown>) {
+      handler = toolHandler;
+    },
+  } as unknown as McpServer;
+
+  registerCheckAuthHealth(server, async () => { throw new Error('missing accounts.json'); });
+  const result = await handler!() as {
+    content: Array<{ text: string }>;
+    isError?: boolean;
+  };
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(JSON.parse(result.content[0]!.text), {
+    schemaVersion: 1,
+    accounts: [],
+    healthy: false,
+    exitCode: 1,
+    error: {
+      category: 'configuration_error',
+      message: 'missing accounts.json',
+    },
+  });
 });

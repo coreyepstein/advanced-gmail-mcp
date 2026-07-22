@@ -20,7 +20,7 @@ class FakeHealthOAuthClient extends EventEmitter {
 
   constructor(
     readonly profileEmail: string,
-    private readonly refreshResult: StoredToken | Error,
+    private readonly refreshResult: StoredToken | Error | Promise<StoredToken>,
   ) {
     super();
   }
@@ -32,9 +32,10 @@ class FakeHealthOAuthClient extends EventEmitter {
   async refreshAccessToken(): Promise<{ credentials: StoredToken }> {
     this.refreshCalls += 1;
     this.credentialsAtRefresh = { ...this.credentials };
-    if (this.refreshResult instanceof Error) throw this.refreshResult;
-    this.emit('tokens', this.refreshResult);
-    this.credentials = { ...this.credentials, ...this.refreshResult };
+    const refreshResult = await this.refreshResult;
+    if (refreshResult instanceof Error) throw refreshResult;
+    this.emit('tokens', refreshResult);
+    this.credentials = { ...this.credentials, ...refreshResult };
     return { credentials: this.credentials };
   }
 }
@@ -145,6 +146,22 @@ test('health checks every account and returns a failing aggregate', async () => 
   assert.equal(report.exitCode, 1);
   assert.match(logs.join('\n'), /personal/);
   assert.match(logs.join('\n'), /work/);
+});
+
+test('a hung refresh times out and remaining accounts are still checked', async () => {
+  const clients = [
+    new FakeHealthOAuthClient(personal.email, new Promise<StoredToken>(() => {})),
+    new FakeHealthOAuthClient(work.email, { access_token: 'work-access' }),
+  ];
+  const report = await checkAuthStatus({
+    ...healthDependencies({ accounts: [personal, work], clients }),
+    requestTimeoutMs: 20,
+  });
+
+  assert.deepEqual(report.accounts.map(result => result.category), ['network', 'healthy']);
+  assert.equal(clients[0]!.refreshCalls, 1);
+  assert.equal(clients[1]!.refreshCalls, 1);
+  assert.equal(report.exitCode, 1);
 });
 
 test('health reports a wrong account after refresh', async () => {

@@ -48,7 +48,7 @@ function runWriter(tokenPath: string, update: Record<string, unknown>): Promise<
 
 function createLock(
   tokenPath: string,
-  owner: { id: string; pid: number; hostname: string; createdAt: number },
+  owner: { id: string; pid: number; hostname: string },
 ): string {
   const lockPath = getTokenLockPath(tokenPath);
   fs.mkdirSync(lockPath, { recursive: true, mode: 0o700 });
@@ -106,6 +106,24 @@ test('an intentional token-directory link writes privately to its target', t => 
   assert.equal(fs.statSync(path.join(targetDirectory, 'account.json')).mode & 0o777, 0o600);
 });
 
+test('a per-account token symlink is rejected without changing its target', t => {
+  if (process.platform === 'win32') return;
+  const tokenPath = tempTokenPath(t);
+  const external = path.join(path.dirname(path.dirname(tokenPath)), 'external.json');
+  fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
+  fs.writeFileSync(external, JSON.stringify({ refresh_token: 'sentinel' }), { mode: 0o600 });
+  fs.symlinkSync(external, tokenPath);
+
+  assert.throws(() => readStoredTokenFile(tokenPath), /unsafe token file/i);
+  assert.throws(
+    () => writeStoredTokenFile(tokenPath, { access_token: 'should-not-write' }),
+    /unsafe token file/i,
+  );
+  assert.deepEqual(JSON.parse(fs.readFileSync(external, 'utf8')), {
+    refresh_token: 'sentinel',
+  });
+});
+
 test('malformed token errors never include token contents', t => {
   const tokenPath = tempTokenPath(t);
   fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
@@ -158,7 +176,6 @@ test('a writer waits for a live lock then merges the latest refresh token', asyn
     id: 'test-owner',
     pid: process.pid,
     hostname: os.hostname(),
-    createdAt: Date.now(),
   });
 
   const writer = runWriter(tokenPath, { access_token: 'child-access' });
@@ -182,7 +199,6 @@ test('lock waiting is bounded and a live owner is not stolen', t => {
     id: 'live-owner',
     pid: process.pid,
     hostname: os.hostname(),
-    createdAt: Date.now() - 60_000,
   });
   const old = new Date(Date.now() - 60_000);
   fs.utimesSync(lockPath, old, old);
@@ -206,7 +222,6 @@ test('a lock with an old dead local owner is recovered', t => {
     id: 'dead-owner',
     pid: 99_999_999,
     hostname: os.hostname(),
-    createdAt: Date.now() - 60_000,
   });
   const old = new Date(Date.now() - 60_000);
   fs.utimesSync(lockPath, old, old);
@@ -219,4 +234,25 @@ test('a lock with an old dead local owner is recovered', t => {
 
   assert.equal(stored.refresh_token, 'recovered');
   assert.equal(fs.existsSync(lockPath), false);
+});
+
+test('concurrent stale-lock recovery preserves every writer update', async t => {
+  const tokenPath = tempTokenPath(t);
+  writeStoredTokenFile(tokenPath, { refresh_token: 'durable' });
+  const lockPath = createLock(tokenPath, {
+    id: 'dead-owner',
+    pid: 99_999_999,
+    hostname: os.hostname(),
+  });
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(lockPath, old, old);
+
+  await Promise.all(Array.from({ length: 6 }, (_, index) =>
+    runWriter(tokenPath, { [`recovery_writer_${index}`]: index })));
+
+  const stored = readStoredTokenFile(tokenPath);
+  assert.equal(stored?.refresh_token, 'durable');
+  for (let index = 0; index < 6; index += 1) {
+    assert.equal(stored?.[`recovery_writer_${index}`], index);
+  }
 });

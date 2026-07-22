@@ -34,6 +34,7 @@ function createHarness(options: HarnessOptions = {}) {
   const signalSource = new EventEmitter();
   let profileCalls = 0;
   let dynamicRedirect = '';
+  let callbackServer: http.Server | null = null;
 
   const oauthClient: OAuthClientLike = {
     credentials: {},
@@ -82,6 +83,10 @@ function createHarness(options: HarnessOptions = {}) {
         },
       },
     }),
+    createServer: listener => {
+      callbackServer = http.createServer(listener);
+      return callbackServer;
+    },
     readToken: () => options.existingToken ?? null,
     writeToken: (_account, update) => {
       writes.push(update);
@@ -99,6 +104,7 @@ function createHarness(options: HarnessOptions = {}) {
     authOptions,
     tokenOptions,
     signalSource,
+    get callbackServer() { return callbackServer; },
     get profileCalls() { return profileCalls; },
   };
 }
@@ -207,6 +213,25 @@ test('missing refresh token without stored fallback saves nothing', async () => 
   assert.equal(harness.writes.length, 0);
 });
 
+test('revoked stored refresh token is never reused as authorization fallback', async () => {
+  const storedError = Object.assign(new Error('invalid_grant'), { code: 401 });
+  const harness = createHarness({
+    existingToken: { access_token: 'old-access', refresh_token: 'revoked-refresh' },
+    storedProfileError: storedError,
+    returnedTokens: { access_token: 'new-access-only' },
+  });
+  const completion = authenticateAccount(account, {}, harness.deps);
+  const rejection = assert.rejects(completion, /npm run auth -- welgo --force-consent/);
+  const authUrl = await waitForAuthUrl(harness.logs);
+  await request(callbackFrom(authUrl, {
+    code: 'authorization-code',
+    state: authUrl.searchParams.get('state')!,
+  }));
+
+  await rejection;
+  assert.equal(harness.writes.length, 0);
+});
+
 for (const scenario of [
   { name: 'denial', params: (state: string) => ({ error: 'access_denied', state }), pattern: /denied/i },
   { name: 'missing code', params: (state: string) => ({ state }), pattern: /missing authorization code/i },
@@ -285,4 +310,17 @@ test('timeout terminates an in-flight token exchange', async () => {
   await assert.rejects(completion, /timed out/i);
   await callback;
   assert.equal(harness.writes.length, 0);
+});
+
+test('callback server errors reject once and save no token', async () => {
+  const harness = createHarness();
+  const completion = authenticateAccount(account, {}, harness.deps);
+  await waitForAuthUrl(harness.logs);
+  const rejection = assert.rejects(completion, /callback server failed/i);
+
+  harness.callbackServer!.emit('error', new Error('simulated listener failure'));
+
+  await rejection;
+  assert.equal(harness.writes.length, 0);
+  assert.equal(harness.signalSource.listenerCount('SIGINT'), 0);
 });

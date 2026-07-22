@@ -12,12 +12,18 @@ const DEFAULT_LOCK_TIMEOUT_MS = 10_000;
 const DEFAULT_LOCK_RETRY_MS = 25;
 const DEFAULT_STALE_LOCK_MS = 30_000;
 const LOCK_OWNER_FILE = 'owner.json';
+const LOCK_RECOVERY_FILE = 'recovery.json';
 
 interface LockOwner {
   id: string;
   pid: number;
   hostname: string;
-  createdAt: number;
+}
+
+interface StaleLockEvidence {
+  device: number;
+  inode: number;
+  ownerId: string | null;
 }
 
 export interface TokenStoreOptions {
@@ -91,9 +97,12 @@ function assertRegularTokenFile(tokenPath: string): void {
 /** Read a token file without ever including its contents in an error. */
 export function readStoredTokenFile(tokenPath: string): StoredToken | null {
   ensurePrivateTokenDirectory(path.dirname(tokenPath));
-  if (!fs.existsSync(tokenPath)) return null;
-
-  assertRegularTokenFile(tokenPath);
+  try {
+    assertRegularTokenFile(tokenPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
   repairMode(tokenPath, TOKEN_FILE_MODE);
 
   let parsed: unknown;
@@ -122,8 +131,7 @@ function readLockOwner(lockPath: string): LockOwner | null {
     if (!isRecord(parsed)
         || typeof parsed.id !== 'string'
         || typeof parsed.pid !== 'number'
-        || typeof parsed.hostname !== 'string'
-        || typeof parsed.createdAt !== 'number') {
+        || typeof parsed.hostname !== 'string') {
       return null;
     }
     return parsed as unknown as LockOwner;
@@ -143,39 +151,63 @@ function isLocalProcessAlive(pid: number): boolean {
   }
 }
 
-function isProvenStaleLock(lockPath: string, staleLockMs: number): boolean {
+function getStaleLockEvidence(
+  lockPath: string,
+  staleLockMs: number,
+): StaleLockEvidence | null {
   let info: fs.Stats;
   try {
     info = fs.lstatSync(lockPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
 
   if (!info.isDirectory() || info.isSymbolicLink()) {
     throw new Error(`Unsafe token lock at ${lockPath}.`);
   }
-  if (Date.now() - info.mtimeMs <= staleLockMs) return false;
+  if (Date.now() - info.mtimeMs <= staleLockMs) return null;
 
   const owner = readLockOwner(lockPath);
   if (!owner) {
-    // An old ownerless directory proves acquisition never completed.
-    return true;
+    return { device: info.dev, inode: info.ino, ownerId: null };
   }
   if (owner.hostname !== os.hostname()) {
-    // This implementation cannot prove a process on another host is dead.
-    return false;
+    return null;
   }
-  return !isLocalProcessAlive(owner.pid);
+  if (isLocalProcessAlive(owner.pid)) return null;
+  return { device: info.dev, inode: info.ino, ownerId: owner.id };
 }
 
-function recoverStaleLock(lockPath: string): boolean {
+function recoverStaleLock(lockPath: string, evidence: StaleLockEvidence): boolean {
+  const claimPath = path.join(lockPath, LOCK_RECOVERY_FILE);
+  try {
+    fs.writeFileSync(claimPath, `${process.pid}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: TOKEN_FILE_MODE,
+    });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST' || code === 'ENOENT') return false;
+    throw error;
+  }
+
   const quarantinePath = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
   try {
+    const current = fs.lstatSync(lockPath);
+    const currentOwner = readLockOwner(lockPath);
+    if (current.dev !== evidence.device
+        || current.ino !== evidence.inode
+        || (currentOwner?.id ?? null) !== evidence.ownerId) {
+      return false;
+    }
     fs.renameSync(lockPath, quarantinePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw error;
+  } finally {
+    fs.rmSync(claimPath, { force: true });
   }
   fs.rmSync(quarantinePath, { recursive: true, force: true });
   return true;
@@ -189,14 +221,13 @@ function acquireTokenLock(tokenPath: string, options: TokenStoreOptions): LockOw
   const deadline = Date.now() + timeoutMs;
 
   while (true) {
-    const owner: LockOwner = {
-      id: randomUUID(),
-      pid: process.pid,
-      hostname: os.hostname(),
-      createdAt: Date.now(),
-    };
     try {
       fs.mkdirSync(lockPath, { mode: TOKEN_DIRECTORY_MODE });
+      const owner: LockOwner = {
+        id: randomUUID(),
+        pid: process.pid,
+        hostname: os.hostname(),
+      };
       try {
         fs.writeFileSync(
           path.join(lockPath, LOCK_OWNER_FILE),
@@ -212,8 +243,8 @@ function acquireTokenLock(tokenPath: string, options: TokenStoreOptions): LockOw
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
 
-    if (isProvenStaleLock(lockPath, staleLockMs)) {
-      recoverStaleLock(lockPath);
+    const staleEvidence = getStaleLockEvidence(lockPath, staleLockMs);
+    if (staleEvidence && recoverStaleLock(lockPath, staleEvidence)) {
       continue;
     }
     if (Date.now() >= deadline) {

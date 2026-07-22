@@ -6,6 +6,8 @@ import { getAccounts, resolveAccount, type AccountConfig } from './config.js';
 import {
   authenticateAccount,
   checkAuthStatus,
+  createAuthHealthEnvelope,
+  createAuthHealthFailure,
   type AuthHealthReport,
   type AuthFlowOptions,
 } from './gmail/auth.js';
@@ -101,11 +103,20 @@ export async function runAuthCli(
   }
 
   if (command.mode === 'check') {
-    const report = await dependencies.checkAuthStatus({ json: command.json });
-    if (command.json) {
-      dependencies.log(JSON.stringify({ schemaVersion: 1, ...report }));
+    try {
+      const report = await dependencies.checkAuthStatus({ json: command.json });
+      if (command.json) {
+        dependencies.log(JSON.stringify(createAuthHealthEnvelope(report)));
+      }
+      return report.exitCode;
+    } catch (error) {
+      if (command.json) {
+        dependencies.log(JSON.stringify(createAuthHealthFailure(error)));
+      } else {
+        dependencies.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return 1;
     }
-    return report.exitCode;
   }
 
   if (command.account) {

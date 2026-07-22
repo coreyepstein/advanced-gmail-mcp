@@ -101,3 +101,52 @@ test('JSON check mode emits one machine-readable report without human health lin
     ...report,
   });
 });
+
+test('JSON check mode keeps setup failures machine-readable', async () => {
+  const logs: string[] = [];
+  const exitCode = await runAuthCli(['--check', '--json'], {
+    getAccounts: () => [],
+    resolveAccount: () => { throw new Error('not used'); },
+    authenticateAccount: async () => {},
+    checkAuthStatus: async () => { throw new Error('accounts.json is invalid'); },
+    log: message => { logs.push(message); },
+    error: () => {},
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(logs.length, 1);
+  assert.deepEqual(JSON.parse(logs[0]!), {
+    schemaVersion: 1,
+    accounts: [],
+    healthy: false,
+    exitCode: 1,
+    error: {
+      category: 'configuration_error',
+      message: 'accounts.json is invalid',
+    },
+  });
+});
+
+test('all-account authorization attempts every account and aggregates failure', async () => {
+  const accounts = [
+    { alias: 'first', email: 'first@example.com' },
+    { alias: 'second', email: 'second@example.com' },
+  ];
+  const attempted: string[] = [];
+  const errors: string[] = [];
+  const exitCode = await runAuthCli([], {
+    getAccounts: () => accounts,
+    resolveAccount: () => accounts[0]!,
+    authenticateAccount: async account => {
+      attempted.push(account.alias);
+      if (account.alias === 'first') throw new Error('first failed');
+    },
+    checkAuthStatus: async () => ({ accounts: [], healthy: true, exitCode: 0 }),
+    log: () => {},
+    error: message => { errors.push(message); },
+  });
+
+  assert.deepEqual(attempted, ['first', 'second']);
+  assert.equal(exitCode, 1);
+  assert.match(errors.join('\n'), /first failed/);
+});

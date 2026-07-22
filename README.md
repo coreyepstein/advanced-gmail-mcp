@@ -74,7 +74,7 @@ npm run auth -- work
 npm run auth:check
 
 # Emit the same report as versioned JSON for automation
-npm run auth:check -- --json
+npm run --silent auth:check -- --json
 
 # Explicit recovery for one account only
 npm run auth -- work --force-consent
@@ -147,7 +147,9 @@ Then use `/email` or `/checkemail` in Claude Code.
 | `trash_email` | Move to trash |
 | `batch_modify` | Batch archive/trash/label |
 
-All tools accept an optional `account` parameter (alias or email). Defaults to the account set in `accounts.json`.
+Account-specific tools accept an optional `account` parameter (alias or email) and otherwise use
+the configured default. `check_auth_health` intentionally accepts no account parameter because it
+must verify every configured account before reporting healthy.
 
 ## Commands
 
