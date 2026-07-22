@@ -31,8 +31,9 @@ npm install
    - APIs & Services → Enable APIs → search "Gmail API" → Enable
 4. Configure the **OAuth consent screen**:
    - APIs & Services → OAuth consent screen
-   - User type: External (or Internal if using Google Workspace)
-   - Add your email address(es) as test users
+   - Choose **External** when the account list mixes personal Gmail and Google Workspace accounts
+   - Publish the app to **In production** after setup. External apps left in Testing can receive refresh tokens that expire after seven days
+   - If you intentionally keep the app in Testing, add every configured email address as a test user
    - Add scopes: `gmail.readonly`, `gmail.modify`, `gmail.send`, `gmail.compose`
 5. Create **OAuth credentials**:
    - APIs & Services → Credentials → Create Credentials → OAuth client ID
@@ -63,17 +64,33 @@ You can add as many accounts as you want. Each needs a unique `alias`.
 ### 4. Authenticate
 
 ```bash
-# Authenticate all accounts (opens browser for each)
+# Authenticate all accounts. Accounts with a healthy saved token are skipped.
 npm run auth
 
-# Or authenticate a single account
+# Authenticate or verify one account
 npm run auth -- work
 
-# Check auth status
+# Check every account without opening a browser
 npm run auth:check
+
+# Explicit recovery for one account only
+npm run auth -- work --force-consent
 ```
 
-The auth flow opens a browser window for each account. Tokens are saved to `./tokens/`.
+Normal authentication first verifies an existing token against the configured Gmail address. It
+opens the Google consent flow only when no usable token is present. Normal consent does not force
+Google to issue a new refresh token.
+
+Use `--force-consent` only for explicit recovery. It requires exactly one account alias, requests
+consent again, and asks Google for a replacement refresh token. Select the Gmail account that
+matches the email configured for that alias.
+
+`npm run auth:check` is a live, noninteractive health check. For each configured account it forces
+a refresh-token exchange, calls the Gmail profile endpoint, and verifies that Google returned the
+configured email address. It reports every account and exits with a nonzero status if any account
+fails. It never opens a browser or starts a consent flow.
+
+Tokens are saved under `./tokens/`.
 
 ### 5. Add to Claude Code
 
@@ -149,9 +166,69 @@ Quick 3-phase inbox sweep:
 | `accounts.json not found` | Copy `accounts.example.json` to `accounts.json` |
 | `credentials.json not found` | Download OAuth credentials from GCP Console |
 | `No token for...` | Run `npm run auth -- <alias>` |
-| `Token refresh failed` | Re-authenticate: `npm run auth -- <alias>` |
-| `403 Forbidden` | Add your email as test user in GCP OAuth consent screen |
-| `403 insufficient scopes` | Re-authenticate to get updated scopes |
+| `REAUTHORIZATION_REQUIRED` or `invalid_grant` | Run `npm run auth -- <alias> --force-consent` |
+| `DOMAIN_POLICY` | Ask the Google Workspace administrator to allow the app and Gmail scopes |
+| `INSUFFICIENT_SCOPE` | Review the configured OAuth scopes. If the grant must change, use the forced recovery command for that alias |
+| `WRONG_ACCOUNT` | Run authentication for the alias again and select its configured Gmail address |
+| `QUOTA` or `RATE_LIMIT` | Wait, then retry. Forced consent does not fix Gmail quotas |
+| `NETWORK` or `TRANSIENT` | Check the network and retry the live health check |
+| `LOCAL_PERMISSION` or `CORRUPT_TOKEN` | Repair local ownership or remove only the affected token, then authenticate that alias again |
+| Other `403 Forbidden` | Inspect the reported category. A 403 can be policy, scope, quota, or access denial. Do not assume reauthorization will fix it |
+
+Start diagnosis with:
+
+```bash
+npm run auth:check
+```
+
+Human reauthorization cannot be eliminated in every case. Google can invalidate refresh tokens
+after a user or administrator revokes access, a Gmail password change, six months without token
+use, token issuance limits, account security enforcement, or a required scope change. When the
+health check reports that recovery is required, use this exact order:
+
+```bash
+npm run auth:check
+npm run auth -- <alias> --force-consent
+```
+
+## OAuth Scope Policy
+
+This release intentionally preserves the existing request for these four scopes:
+
+- `gmail.readonly`
+- `gmail.modify`
+- `gmail.send`
+- `gmail.compose`
+
+Reducing scopes is a separate migration. It requires an operation-by-operation access audit and a
+new grant. Changing the scope list in code does not remove permissions Google already granted to a
+stored refresh token. A true downscope requires revoking the old grant or token and authorizing the
+smaller scope set again.
+
+## Local Credential Safety
+
+- `credentials.json`, `accounts.json`, and `tokens/` are ignored by Git. Never commit, copy into CI,
+  paste, or log their contents.
+- On POSIX systems, credential and token files are repaired to owner-only mode (`0600`) and the
+  token directory to owner-only mode (`0700`).
+- Token updates are merge-safe and atomically replace the saved file. A refresh-token event cannot
+  erase an existing refresh token merely because Google returned only a new access token.
+- Keep credentials and tokens on the machine that runs the MCP server. Treat backups as secrets.
+
+## Continuous Integration
+
+The GitHub Actions workflow runs on pull requests and pushes to `main`. It executes:
+
+```bash
+npm ci
+npm run typecheck
+npm test
+npm run build
+```
+
+CI does not receive Gmail client credentials, account configuration, or tokens. The automatic
+GitHub token is restricted to read-only repository contents, checkout does not persist credentials,
+and official GitHub actions are pinned to immutable commit SHAs.
 
 ## License
 
