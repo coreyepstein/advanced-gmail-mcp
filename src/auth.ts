@@ -6,6 +6,7 @@ import { getAccounts, resolveAccount, type AccountConfig } from './config.js';
 import {
   authenticateAccount,
   checkAuthStatus,
+  type AuthHealthReport,
   type AuthFlowOptions,
 } from './gmail/auth.js';
 
@@ -64,7 +65,7 @@ export interface AuthCliDependencies {
     account: AccountConfig,
     options?: AuthFlowOptions,
   ) => Promise<void>;
-  checkAuthStatus: () => void | Promise<void>;
+  checkAuthStatus: () => AuthHealthReport | Promise<AuthHealthReport>;
   log: (message: string) => void;
   error: (message: string) => void;
 }
@@ -91,8 +92,8 @@ export async function runAuthCli(
   }
 
   if (command.mode === 'check') {
-    await dependencies.checkAuthStatus();
-    return 0;
+    const report = await dependencies.checkAuthStatus();
+    return report.exitCode;
   }
 
   if (command.account) {

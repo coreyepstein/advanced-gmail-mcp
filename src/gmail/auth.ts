@@ -8,7 +8,6 @@ import {
   type AccountConfig,
   getAccounts,
   getCredentialsPath,
-  getTokenPath,
 } from '../config.js';
 import { readStoredToken, writeStoredToken } from './token-store.js';
 import type { StoredToken } from './types.js';
@@ -49,6 +48,11 @@ export interface TokenPersistenceClientLike {
   setCredentials(credentials: StoredToken): void;
 }
 
+export interface HealthOAuthClientLike extends TokenPersistenceClientLike {
+  credentials: StoredToken;
+  refreshAccessToken(): Promise<{ credentials: StoredToken }>;
+}
+
 export type TokenWriter = (
   account: AccountConfig,
   update: StoredToken,
@@ -85,6 +89,49 @@ export interface AuthFlowDependencies {
   timeoutMs?: number;
   signalSource?: SignalSourceLike;
   createState?: () => string;
+}
+
+export type AuthHealthCategory =
+  | 'healthy'
+  | 'missing_token'
+  | 'corrupt_token'
+  | 'reauthorization_required'
+  | 'insufficient_scope'
+  | 'domain_policy'
+  | 'quota'
+  | 'rate_limit'
+  | 'transient'
+  | 'network'
+  | 'wrong_account'
+  | 'local_permission'
+  | 'forbidden'
+  | 'unknown';
+
+export interface AccountAuthHealth {
+  alias: string;
+  email: string;
+  category: AuthHealthCategory;
+  healthy: boolean;
+  message: string;
+}
+
+export interface AuthHealthReport {
+  accounts: AccountAuthHealth[];
+  healthy: boolean;
+  exitCode: 0 | 1;
+}
+
+export interface AuthHealthDependencies {
+  getAccounts?: () => AccountConfig[];
+  loadCredentials?: () => OAuthClientCredentials;
+  createOAuthClient?: (
+    credentials: OAuthClientCredentials,
+    redirectUri: string,
+  ) => HealthOAuthClientLike;
+  createGmailClient?: (oauthClient: HealthOAuthClientLike) => GmailProfileClientLike;
+  readToken?: (account: AccountConfig) => StoredToken | null;
+  writeToken?: TokenWriter;
+  log?: (message: string) => void;
 }
 
 function isPosixModeSupported(): boolean {
@@ -488,37 +535,210 @@ export async function authenticateAccount(
   return completion;
 }
 
-/** Legacy file-status command. U4 replaces this with live all-account health. */
-export function checkAuthStatus(): void {
-  const accounts = getAccounts();
-  console.log('\nAccount Status:');
-  console.log('─'.repeat(60));
+function defaultCreateHealthOAuthClient(
+  credentials: OAuthClientCredentials,
+  redirectUri: string,
+): HealthOAuthClientLike {
+  return new google.auth.OAuth2(
+    credentials.client_id,
+    credentials.client_secret,
+    redirectUri,
+  ) as unknown as HealthOAuthClientLike;
+}
 
-  for (const account of accounts) {
-    const tokenPath = getTokenPath(account);
-    const exists = fs.existsSync(tokenPath);
-    let status = 'NOT AUTHENTICATED';
-    let scopeInfo = '';
+function defaultCreateHealthGmailClient(
+  oauthClient: HealthOAuthClientLike,
+): GmailProfileClientLike {
+  return google.gmail({
+    version: 'v1',
+    auth: oauthClient as unknown as Auth.OAuth2Client,
+  }) as unknown as GmailProfileClientLike;
+}
 
-    if (exists) {
-      try {
-        const token = readStoredToken(account);
-        const expired = token?.expiry_date && token.expiry_date < Date.now();
-        const hasSendScope = token?.scope?.includes('gmail.send');
-        const hasComposeScope = token?.scope?.includes('gmail.compose');
-        status = expired ? 'EXPIRED (will auto-refresh)' : 'OK';
-        scopeInfo = hasSendScope && hasComposeScope
-          ? ' [send+compose]'
-          : hasSendScope ? ' [send only]' : ' [read/modify only]';
-      } catch {
-        status = 'TOKEN CORRUPT';
-      }
+function safeErrorRecord(error: unknown): Record<string, unknown> | null {
+  return typeof error === 'object' && error !== null
+    ? error as Record<string, unknown>
+    : null;
+}
+
+function healthProviderDetails(error: unknown): {
+  status?: number;
+  reason?: string;
+  message: string;
+  systemCode?: string;
+} {
+  const errorRecord = safeErrorRecord(error);
+  const response = safeErrorRecord(errorRecord?.response);
+  const data = safeErrorRecord(response?.data);
+  const providerError = data?.error;
+  const providerRecord = safeErrorRecord(providerError);
+  const reasons: unknown[] = [
+    typeof providerError === 'string' ? providerError : undefined,
+    providerRecord?.reason,
+    providerRecord?.status,
+  ];
+  if (Array.isArray(providerRecord?.errors)) {
+    reasons.push(...providerRecord.errors.map(item => safeErrorRecord(item)?.reason));
+  }
+  if (Array.isArray(data?.errors)) {
+    reasons.push(...data.errors.map(item => safeErrorRecord(item)?.reason));
+  }
+
+  const statusCandidate = typeof errorRecord?.code === 'number'
+    ? errorRecord.code
+    : response?.status;
+  const messageCandidate = typeof providerRecord?.message === 'string'
+    ? providerRecord.message
+    : error instanceof Error ? error.message : '';
+  return {
+    status: typeof statusCandidate === 'number' ? statusCandidate : undefined,
+    reason: reasons.find((value): value is string => typeof value === 'string'),
+    message: messageCandidate.toLowerCase(),
+    systemCode: typeof errorRecord?.code === 'string' ? errorRecord.code : undefined,
+  };
+}
+
+function classifyHealthError(error: unknown): AuthHealthCategory {
+  const details = healthProviderDetails(error);
+  const reason = details.reason?.toLowerCase();
+
+  if (details.systemCode === 'EACCES' || details.systemCode === 'EPERM') {
+    return 'local_permission';
+  }
+  if (/invalid token file|invalid oauth credential json/i.test(
+    error instanceof Error ? error.message : '',
+  )) {
+    return 'corrupt_token';
+  }
+  if (details.status === 401 || reason === 'invalid_grant'
+      || details.message.includes('invalid_grant')) {
+    return 'reauthorization_required';
+  }
+  if (reason === 'insufficientpermissions' || reason === 'insufficient_scope'
+      || details.message.includes('insufficient authentication scopes')) {
+    return 'insufficient_scope';
+  }
+  if (reason === 'domainpolicy') return 'domain_policy';
+  if (details.status === 429 || reason === 'ratelimitexceeded'
+      || reason === 'userratelimitexceeded') {
+    return 'rate_limit';
+  }
+  if (reason === 'quotaexceeded' || reason === 'dailylimitexceeded'
+      || reason === 'dailylimitexceededunreg') {
+    return 'quota';
+  }
+  if (details.status !== undefined && details.status >= 500 && details.status <= 599) {
+    return 'transient';
+  }
+  if (details.systemCode && [
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+    'ENOTFOUND',
+    'ETIMEDOUT',
+  ].includes(details.systemCode)) {
+    return 'network';
+  }
+  if (details.status === 403) return 'forbidden';
+  return 'unknown';
+}
+
+function healthMessage(category: AuthHealthCategory, alias: string): string {
+  switch (category) {
+    case 'healthy': return 'Gmail refresh and profile access verified.';
+    case 'missing_token': return 'No stored token was found.';
+    case 'corrupt_token': return 'The stored token or OAuth credential file is invalid.';
+    case 'reauthorization_required':
+      return `Google requires recovery. Run: npm run auth -- ${alias} --force-consent`;
+    case 'insufficient_scope': return 'The grant does not include the required Gmail scope.';
+    case 'domain_policy': return 'A Google Workspace policy blocked Gmail access.';
+    case 'quota': return 'A Gmail quota blocked the check.';
+    case 'rate_limit': return 'Gmail temporarily rate-limited the check.';
+    case 'transient': return 'Google returned a temporary service failure.';
+    case 'network': return 'The check could not reach Google.';
+    case 'wrong_account': return 'Google returned a different Gmail account.';
+    case 'local_permission': return 'Local file permissions blocked the check.';
+    case 'forbidden': return 'Google denied Gmail access without a recovery signal.';
+    default: return 'The Gmail check failed for an unclassified reason.';
+  }
+}
+
+function resultFor(
+  account: AccountConfig,
+  category: AuthHealthCategory,
+): AccountAuthHealth {
+  return {
+    alias: account.alias,
+    email: account.email,
+    category,
+    healthy: category === 'healthy',
+    message: healthMessage(category, account.alias),
+  };
+}
+
+async function checkOneAccount(
+  account: AccountConfig,
+  dependencies: Required<AuthHealthDependencies>,
+): Promise<AccountAuthHealth> {
+  try {
+    const token = dependencies.readToken(account);
+    if (!token) return resultFor(account, 'missing_token');
+    if (typeof token.refresh_token !== 'string' || token.refresh_token.length === 0) {
+      return resultFor(account, 'reauthorization_required');
     }
 
-    const icon = exists && status !== 'TOKEN CORRUPT' ? '+' : '-';
-    console.log(
-      `  ${icon} ${account.alias.padEnd(10)} ${account.email.padEnd(30)} ${status}${scopeInfo}`,
+    const credentials = dependencies.loadCredentials();
+    const oauthClient = dependencies.createOAuthClient(credentials, DEFAULT_REDIRECT_URI);
+    configureAuthClient(
+      account,
+      oauthClient,
+      { refresh_token: token.refresh_token },
+      dependencies.writeToken,
+    );
+
+    // Do not use getAccessToken(): it may accept a cached access token. This
+    // explicit exchange proves that the durable refresh token still works.
+    await oauthClient.refreshAccessToken();
+    const gmail = dependencies.createGmailClient(oauthClient);
+    const profile = await gmail.users.getProfile({ userId: 'me' });
+    const actualEmail = profile.data.emailAddress;
+    if (typeof actualEmail !== 'string' || !sameEmail(actualEmail, account.email)) {
+      return resultFor(account, 'wrong_account');
+    }
+    return resultFor(account, 'healthy');
+  } catch (error) {
+    return resultFor(account, classifyHealthError(error));
+  }
+}
+
+/** Force-refresh and call Gmail for every configured account without a browser. */
+export async function checkAuthStatus(
+  dependencyOverrides: AuthHealthDependencies = {},
+): Promise<AuthHealthReport> {
+  const dependencies: Required<AuthHealthDependencies> = {
+    getAccounts: dependencyOverrides.getAccounts ?? getAccounts,
+    loadCredentials: dependencyOverrides.loadCredentials ?? loadCredentials,
+    createOAuthClient: dependencyOverrides.createOAuthClient ?? defaultCreateHealthOAuthClient,
+    createGmailClient: dependencyOverrides.createGmailClient ?? defaultCreateHealthGmailClient,
+    readToken: dependencyOverrides.readToken ?? readStoredToken,
+    writeToken: dependencyOverrides.writeToken ?? writeStoredToken,
+    log: dependencyOverrides.log ?? console.log,
+  };
+  const accounts = dependencies.getAccounts();
+  const results: AccountAuthHealth[] = [];
+
+  dependencies.log('Account Status:');
+  for (const account of accounts) {
+    const result = await checkOneAccount(account, dependencies);
+    results.push(result);
+    dependencies.log(
+      `${result.healthy ? '+' : '-'} ${result.alias} ${result.email} `
+      + `${result.category.toUpperCase()}: ${result.message}`,
     );
   }
-  console.log('');
+
+  const healthy = results.every(result => result.healthy);
+  dependencies.log(`Summary: ${results.filter(result => result.healthy).length}/${results.length} healthy.`);
+  return { accounts: results, healthy, exitCode: healthy ? 0 : 1 };
 }
