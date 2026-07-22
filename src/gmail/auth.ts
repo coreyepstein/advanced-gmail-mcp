@@ -44,6 +44,16 @@ export interface OAuthClientLike {
   }): Promise<{ tokens: StoredToken }>;
 }
 
+export interface TokenPersistenceClientLike {
+  on(event: 'tokens', listener: (tokens: StoredToken) => void): unknown;
+  setCredentials(credentials: StoredToken): void;
+}
+
+export type TokenWriter = (
+  account: AccountConfig,
+  update: StoredToken,
+) => StoredToken;
+
 interface GmailProfileClientLike {
   users: {
     getProfile(options: { userId: string }): Promise<{
@@ -158,6 +168,23 @@ function getDependencies(overrides: AuthFlowDependencies): Required<AuthFlowDepe
     signalSource: overrides.signalSource ?? process,
     createState: overrides.createState ?? (() => randomBytes(32).toString('base64url')),
   };
+}
+
+/**
+ * Attach durable refresh persistence before credentials can trigger a request.
+ * Node event listeners run synchronously, so a storage failure propagates to
+ * the refresh caller instead of allowing Gmail use with an unpersisted token.
+ */
+export function configureAuthClient(
+  account: AccountConfig,
+  oauth2Client: TokenPersistenceClientLike,
+  token: StoredToken,
+  writeToken: TokenWriter = writeStoredToken,
+): void {
+  oauth2Client.on('tokens', tokens => {
+    writeToken(account, tokens);
+  });
+  oauth2Client.setCredentials(token);
 }
 
 function sameEmail(left: string, right: string): boolean {
@@ -291,22 +318,11 @@ export async function getAuthClient(account: AccountConfig): Promise<Auth.OAuth2
       `No token for ${account.email}. Run: npm run auth -- ${account.alias}`,
     );
   }
-  oauth2Client.setCredentials(token);
-
-  // Preserve existing behavior until U3 installs durable token-event handling.
-  if (token.expiry_date && token.expiry_date < Date.now() + 60_000) {
-    try {
-      const { credentials: refreshed } = await oauth2Client.refreshAccessToken();
-      oauth2Client.setCredentials(refreshed);
-      writeStoredToken(account, refreshed as StoredToken);
-    } catch (error) {
-      throw new Error(
-        `Token refresh failed for ${account.email}. `
-        + `Re-authenticate: npm run auth -- ${account.alias} --force-consent\n`
-        + `Error: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
+  configureAuthClient(
+    account,
+    oauth2Client as unknown as TokenPersistenceClientLike,
+    token,
+  );
   return oauth2Client;
 }
 
