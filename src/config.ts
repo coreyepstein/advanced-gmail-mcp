@@ -10,12 +10,64 @@ export interface AccountConfig {
   alias: string;
 }
 
-interface Config {
+export interface Config {
   accounts: AccountConfig[];
   default: string;
 }
 
 let _config: Config | null = null;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function validateAlias(alias: unknown): string {
+  if (typeof alias !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(alias)) {
+    throw new Error(
+      'Invalid account alias. Use only letters, numbers, underscores, and hyphens.',
+    );
+  }
+  return alias;
+}
+
+/** Validate account configuration before any alias is used for token I/O. */
+export function validateConfig(value: unknown): Config {
+  if (!isRecord(value) || !Array.isArray(value.accounts) || value.accounts.length === 0) {
+    throw new Error('Invalid accounts.json: accounts must be a non-empty array.');
+  }
+
+  const accounts = value.accounts.map((entry, index): AccountConfig => {
+    if (!isRecord(entry) || typeof entry.email !== 'string' || entry.email.trim() === '') {
+      throw new Error(`Invalid accounts.json: account ${index + 1} must have an email.`);
+    }
+    return {
+      email: entry.email.trim().toLowerCase(),
+      alias: validateAlias(entry.alias),
+    };
+  });
+
+  const aliases = new Set<string>();
+  for (const account of accounts) {
+    const canonicalAlias = account.alias.toLowerCase();
+    if (aliases.has(canonicalAlias)) {
+      throw new Error(`Duplicate account alias: ${account.alias}`);
+    }
+    aliases.add(canonicalAlias);
+  }
+
+  if (typeof value.default !== 'string') {
+    throw new Error('Invalid accounts.json: default must name an account alias.');
+  }
+  const defaultAlias = value.default;
+  const defaultAccount = accounts.find(
+    account => account.alias.toLowerCase() === defaultAlias.toLowerCase(),
+  );
+  if (!defaultAccount) {
+    throw new Error(`Invalid accounts.json: default alias not found: ${defaultAlias}`);
+  }
+
+  return { accounts, default: defaultAccount.alias };
+}
 
 function loadConfig(): Config {
   if (_config) return _config;
@@ -27,7 +79,8 @@ function loadConfig(): Config {
     );
   }
 
-  _config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  const parsed: unknown = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  _config = validateConfig(parsed);
   return _config!;
 }
 
@@ -53,15 +106,15 @@ export function resolveAccount(input?: string): AccountConfig {
   const lower = input.toLowerCase();
 
   // Exact alias match
-  const byAlias = config.accounts.find(a => a.alias === lower);
+  const byAlias = config.accounts.find(a => a.alias.toLowerCase() === lower);
   if (byAlias) return byAlias;
 
   // Exact email match
-  const byEmail = config.accounts.find(a => a.email === lower);
+  const byEmail = config.accounts.find(a => a.email.toLowerCase() === lower);
   if (byEmail) return byEmail;
 
   // Partial email match
-  const byPartial = config.accounts.find(a => a.email.includes(lower));
+  const byPartial = config.accounts.find(a => a.email.toLowerCase().includes(lower));
   if (byPartial) return byPartial;
 
   throw new Error(
@@ -74,5 +127,13 @@ export function getCredentialsPath(): string {
 }
 
 export function getTokenPath(account: AccountConfig): string {
-  return path.join(PROJECT_ROOT, 'tokens', `${account.alias}.json`);
+  const alias = validateAlias(account.alias);
+  const tokenDirectory = path.resolve(PROJECT_ROOT, 'tokens');
+  const tokenPath = path.resolve(tokenDirectory, `${alias}.json`);
+
+  if (path.dirname(tokenPath) !== tokenDirectory) {
+    throw new Error('Invalid account alias: token path must stay inside the token directory.');
+  }
+
+  return tokenPath;
 }

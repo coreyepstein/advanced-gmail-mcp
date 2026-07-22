@@ -7,6 +7,7 @@
     "auth": "tsx src/auth.ts",
     "auth:check": "tsx src/auth.ts --check",
     "start": "tsx src/server.ts",
+    "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc"
   },

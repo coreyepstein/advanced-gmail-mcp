@@ -118,9 +118,11 @@ export interface BatchResult {
 
 /** OAuth token shape stored on disk. */
 export interface StoredToken {
-  access_token: string;
-  refresh_token: string;
-  scope: string;
-  token_type: string;
-  expiry_date: number;
+  access_token?: string | null;
+  refresh_token?: string | null;
+  scope?: string;
+  token_type?: string | null;
+  expiry_date?: number | null;
+  refresh_token_expires_in?: number;
+  [key: string]: unknown;
 }
