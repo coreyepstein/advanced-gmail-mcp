@@ -21,6 +21,17 @@ test('validateConfig accepts unique safe aliases', () => {
   assert.equal(config.default, 'first');
 });
 
+test('validateConfig keeps legacy account files working when default is omitted', () => {
+  const config = validateConfig({
+    accounts: [
+      { email: 'first@example.com', alias: 'first', credentials_path: 'ignored.json' },
+      { email: 'second@example.com', alias: 'second' },
+    ],
+  });
+
+  assert.equal(config.default, 'first');
+});
+
 test('validateConfig rejects aliases that collide on case-insensitive filesystems', () => {
   assert.throws(
     () => validateConfig({
@@ -57,4 +68,3 @@ test('getTokenPath returns a direct token-directory child for a safe alias', () 
   assert.equal(path.basename(tokenPath), 'safe-account.json');
   assert.equal(path.basename(path.dirname(tokenPath)), 'tokens');
 });
-

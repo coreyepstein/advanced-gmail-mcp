@@ -6,7 +6,7 @@ A Gmail [MCP server](https://modelcontextprotocol.io) for [Claude Code](https://
 
 ## Features
 
-- **12 tools**: list, search, read, thread, labels, send, draft, reply, archive, label, trash, batch modify
+- **15 tools** including inbox operations, drafts, replies, batch changes, and live auth health
 - **Multi-account** support with simple aliases
 - **OAuth2** authentication with interactive CLI flow
 - **Token auto-refresh** — re-authenticates transparently
@@ -73,6 +73,9 @@ npm run auth -- work
 # Check every account without opening a browser
 npm run auth:check
 
+# Emit the same report as versioned JSON for automation
+npm run auth:check -- --json
+
 # Explicit recovery for one account only
 npm run auth -- work --force-consent
 ```
@@ -89,6 +92,9 @@ matches the email configured for that alias.
 a refresh-token exchange, calls the Gmail profile endpoint, and verifies that Google returned the
 configured email address. It reports every account and exits with a nonzero status if any account
 fails. It never opens a browser or starts a consent flow.
+
+The read-only `check_auth_health` MCP tool returns that same versioned report inside a live MCP
+session. This proves both that the stored grants work and that the Gmail server is actually loaded.
 
 Tokens are saved under `./tokens/`.
 
@@ -132,6 +138,7 @@ Then use `/email` or `/checkemail` in Claude Code.
 | `read_email` | Read full email by ID |
 | `get_thread` | Get full thread with all messages |
 | `get_labels` | List all labels |
+| `check_auth_health` | Force-refresh and verify every configured account without opening a browser |
 | `send_email` | Send a new email |
 | `draft_email` | Create a draft |
 | `reply_email` | Reply with proper threading |

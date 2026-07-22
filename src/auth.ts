@@ -11,7 +11,7 @@ import {
 } from './gmail/auth.js';
 
 export type AuthCommand =
-  | { mode: 'check' }
+  | { mode: 'check'; json: boolean }
   | {
       mode: 'authenticate';
       account: string | null;
@@ -21,20 +21,27 @@ export type AuthCommand =
 export function parseAuthArgs(args: string[]): AuthCommand {
   const unknownFlags = args.filter(arg => arg.startsWith('--')
     && arg !== '--check'
+    && arg !== '--json'
     && arg !== '--force-consent');
   if (unknownFlags.length > 0) {
     throw new Error(`Unknown option: ${unknownFlags[0]}`);
   }
 
   const checkCount = args.filter(arg => arg === '--check').length;
+  const jsonCount = args.filter(arg => arg === '--json').length;
   const forceCount = args.filter(arg => arg === '--force-consent').length;
   const accounts = args.filter(arg => !arg.startsWith('--'));
 
   if (checkCount > 0) {
-    if (checkCount !== 1 || forceCount > 0 || accounts.length > 0 || args.length !== 1) {
+    if (checkCount !== 1 || jsonCount > 1 || forceCount > 0 || accounts.length > 0
+        || args.length !== 1 + jsonCount) {
       throw new Error('--check cannot be combined with account aliases or recovery options.');
     }
-    return { mode: 'check' };
+    return { mode: 'check', json: jsonCount === 1 };
+  }
+
+  if (jsonCount > 0) {
+    throw new Error('--json can only be used with --check.');
   }
 
   if (forceCount > 0) {
@@ -65,7 +72,9 @@ export interface AuthCliDependencies {
     account: AccountConfig,
     options?: AuthFlowOptions,
   ) => Promise<void>;
-  checkAuthStatus: () => AuthHealthReport | Promise<AuthHealthReport>;
+  checkAuthStatus: (
+    options?: { json?: boolean },
+  ) => AuthHealthReport | Promise<AuthHealthReport>;
   log: (message: string) => void;
   error: (message: string) => void;
 }
@@ -74,7 +83,7 @@ const defaultDependencies: AuthCliDependencies = {
   getAccounts,
   resolveAccount,
   authenticateAccount,
-  checkAuthStatus,
+  checkAuthStatus: options => checkAuthStatus(options?.json ? { log: () => {} } : {}),
   log: console.log,
   error: console.error,
 };
@@ -92,7 +101,10 @@ export async function runAuthCli(
   }
 
   if (command.mode === 'check') {
-    const report = await dependencies.checkAuthStatus();
+    const report = await dependencies.checkAuthStatus({ json: command.json });
+    if (command.json) {
+      dependencies.log(JSON.stringify({ schemaVersion: 1, ...report }));
+    }
     return report.exitCode;
   }
 

@@ -55,10 +55,9 @@ export function validateConfig(value: unknown): Config {
     aliases.add(canonicalAlias);
   }
 
-  if (typeof value.default !== 'string') {
-    throw new Error('Invalid accounts.json: default must name an account alias.');
-  }
-  const defaultAlias = value.default;
+  const defaultAlias = typeof value.default === 'string'
+    ? value.default
+    : accounts[0]!.alias;
   const defaultAccount = accounts.find(
     account => account.alias.toLowerCase() === defaultAlias.toLowerCase(),
   );
