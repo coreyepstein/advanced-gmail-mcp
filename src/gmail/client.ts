@@ -3,6 +3,12 @@ import type { gmail_v1 } from 'googleapis';
 import type { Auth } from 'googleapis';
 import { type AccountConfig, resolveAccount } from '../config.js';
 import { getAuthClient } from './auth.js';
+import {
+  classifyGmailError,
+  providerMessage,
+  type GmailErrorClassification,
+  type GmailErrorCategory,
+} from './errors.js';
 import type {
   EmailSummary,
   EmailFull,
@@ -28,6 +34,10 @@ interface CachedClient {
 
 const CLIENT_CACHE = new Map<string, CachedClient>();
 const CLIENT_TTL_MS = 50 * 60 * 1000; // 50 minutes
+
+export function clearGmailClientCache(): void {
+  CLIENT_CACHE.clear();
+}
 
 /**
  * Get an authenticated Gmail API client for an account.
@@ -61,38 +71,83 @@ export async function getGmailClient(account?: string | AccountConfig): Promise<
 // Retry helper for rate limits
 // ---------------------------------------------------------------------------
 
-async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+export { classifyGmailError } from './errors.js';
+export type { GmailErrorClassification, GmailErrorCategory } from './errors.js';
+
+type Sleep = (milliseconds: number) => Promise<void>;
+
+/** Convert classified Gmail failures into actionable, non-secret guidance. */
+export function formatGmailRuntimeError(error: unknown): Error {
+  const classification = classifyGmailError(error);
+  const details = providerMessage(error);
+  const status = classification.status ? ` (${classification.status})` : '';
+  const reason = classification.reason ? ` [${classification.reason}]` : '';
+  let guidance: string;
+
+  switch (classification.category) {
+    case 'reauthorization_required':
+      guidance = 'Gmail credentials are no longer valid. '
+        + 'Run: npm run auth -- <account-alias> --force-consent';
+      break;
+    case 'insufficient_scope':
+      guidance = 'Gmail denied a required scope. Review the configured Gmail scopes.';
+      break;
+    case 'domain_policy':
+      guidance = 'Google Workspace policy blocked this Gmail action. Contact the Workspace admin.';
+      break;
+    case 'quota':
+      guidance = 'Gmail quota is exhausted. Wait for quota recovery or review the project quota.';
+      break;
+    case 'rate_limit':
+      guidance = 'Gmail rate-limited the request after bounded retries.';
+      break;
+    case 'transient':
+      guidance = 'Gmail is temporarily unavailable. Try the request again later.';
+      break;
+    case 'network':
+      guidance = 'The Gmail request failed at the network layer. Check connectivity and try again.';
+      break;
+    case 'forbidden':
+      guidance = 'Gmail forbade this action. This does not by itself mean the OAuth grant was revoked.';
+      break;
+    default:
+      guidance = 'The Gmail request failed.';
+  }
+
+  const wrapped = new Error(
+    `${guidance}${status}${reason} ${details}`,
+    { cause: error },
+  );
+  wrapped.name = 'GmailRuntimeError';
+  return wrapped;
+}
+
+const defaultSleep: Sleep = milliseconds =>
+  new Promise(resolve => setTimeout(resolve, milliseconds));
+
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  sleep: Sleep = defaultSleep,
+): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await fn();
     } catch (err: unknown) {
       lastError = err;
-      const status = (err as any)?.code || (err as any)?.response?.status;
+      const classification = classifyGmailError(err);
 
-      // Auth errors: give clear re-auth instructions, don't retry
-      if (status === 401 || status === 403) {
-        const message = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `Authentication error (${status}): ${message}\n\n` +
-          `Re-authenticate with: npx tsx src/auth.ts <account-alias>`
-        );
-      }
-
-      // Rate limit: retry with exponential backoff
-      if (status === 429 && attempt < maxRetries) {
+      if (classification.retryable && attempt < maxRetries) {
         const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await sleep(delay);
         continue;
       }
-
-      // Other errors: pass through
-      if (status !== 429) {
-        throw err;
-      }
+      if (classification.category === 'unknown') throw err;
+      throw formatGmailRuntimeError(err);
     }
   }
-  throw lastError;
+  throw formatGmailRuntimeError(lastError);
 }
 
 // ---------------------------------------------------------------------------
