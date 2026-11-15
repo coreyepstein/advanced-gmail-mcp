@@ -106,12 +106,14 @@ function isInlineZeroNewFindings(declaration: string, lines: string[]): boolean 
       if (/#\d/.test(prose.replace(scopedReference, ''))) return false;
       // UI message punctuation is data, not a new narrative assertion.
       const narrative = prose.replace(/"[^"\n]*"|“[^”\n]*”/g, '""');
+      if (/\b(?:ignore|suppress|execute)\b/i.test(narrative)) return false;
       // A contrast can continue the current symptom, but cannot introduce an
       // independent defect just by adding a word such as "still".
       for (const contrast of narrative.split(/\s+but\s+/i).slice(1)) {
-        const clause = contrast.split(/(?<=[.!?])\s+|;\s*|\s+and\s+/i)[0];
-        if (defect.test(clause) && !clause.match(scopedReference)
-          && !/^(?:these|those|both|it|its|no|zero|0)\b/i.test(clause)) return false;
+        for (const clause of contrast.split(/(?<=[.!?])\s+|;\s*|\s+and\s+|,\s+so\s+/i)) {
+          if (defect.test(clause) && !new RegExp(`^(?:the )?${reference}\\b`, 'i').test(clause)
+            && !/^(?:these|those|both|it|its|no|zero|0)\b/i.test(clause)) return false;
+        }
       }
       const clauses = narrative.split(/(?<=[.!?])\s+|;\s*|\s+(?:and|but)\s+/i);
       // A later independent defect assertion needs a citation of its own;
@@ -141,7 +143,7 @@ function isBareNoneReport(before: string[], after: string[]): boolean {
   if (!tail.length) return true;
   if (!/^(?:#{1,6}\s*)?(?:\*\*)?Notes\s*:?\s*(?:\*\*)?$/i.test(tail.shift()!)) return false;
   return tail.every(line => /^[-*] [a-z][a-z0-9 -]*: \S/i.test(line)
-    && !/\b(?:new|unfiled|untracked|uncited|unreported|another|also|maybe|possibly|except|however|but|defects?|bugs?|fails?|failed|failing|failures?|broken|wrong|incorrect|mismatches|ignore|execute|suppress)\b/i.test(line.replace(/"[^"\n]*"|“[^”\n]*”/g, '')));
+    && !/\b(?:new|unfiled|untracked|uncited|unreported|another|also|maybe|possibly|except|however|but|defects?|bugs?|fails?|failed|failing|failures?|broken|wrong|incorrect|mismatch(?:es)?|los(?:e|es|t|ing) (?:data|edits|changes)|data loss|throws? (?:an? )?(?:error|exception)|ignore|execute|suppress)\b/i.test(line.replace(/"[^"\n]*"|“[^”\n]*”/g, '')));
 }
 
 function hasZeroNewFindings(lines: string[]): boolean {
