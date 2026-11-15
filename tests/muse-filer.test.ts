@@ -513,13 +513,13 @@ const distinctivePairs = [
   },
   {
     old: 'Muse: get_macro_trends - Chicago median_rent $5,000 is stale and unverified',
-    title: 'get_macro_trends reports Chicago median rent $5,000 \u2014 stale and unverified vs Zillow $2,163',
+    title: 'get_macro_trends reports Chicago median rent $5,000 — stale and unverified vs Zillow $2,163',
     actual: 'Chicago returned $5,000 from get_macro_trends.',
     shared: ['$5000', 'get_macro_trends'],
   },
   {
     old: 'Muse: get_macro_trends - Richmond HPI YoY 0.80% does not match published FHFA',
-    title: '"Richmond HPI" displays 0.80% \u2014 incorrect source period',
+    title: '"Richmond HPI" displays 0.80% — incorrect source period',
     actual: 'The displayed Richmond HPI is 0.80%.',
     shared: ['0.80%', 'richmond hpi'],
   },
@@ -768,8 +768,8 @@ test('unprefixed TITLE falls back to subject product in runFiler, unknown stays 
 });
 
 test('duplicate guard prevents refiling inflecto-ai #2334 and #2335', async () => {
-  const title1 = 'get_location_brief cannot geocode "1 World Trade Center, New York, NY" \u2014 cross-tool NY comparison impossible';
-  const title2 = 'Logged-in navigation bar has no dashboard link \u2014 still shows "Sign In" and "Start Free" (free and Pro)';
+  const title1 = 'get_location_brief cannot geocode "1 World Trade Center, New York, NY" — cross-tool NY comparison impossible';
+  const title2 = 'Logged-in navigation bar has no dashboard link — still shows "Sign In" and "Start Free" (free and Pro)';
   const body = `TITLE: ${title1}\nREPRO: 1. get_location_brief {"address": "1 World Trade Center, New York, NY"}\nACTUAL: get_location_brief cannot geocode\n\nTITLE: ${title2}\nREPRO: Sign in as free/Pro and look at top nav\nACTUAL: Nav still shows "Sign In" and "Start Free"`;
 
   const existingIssues: Issue[] = [
@@ -800,8 +800,8 @@ test('duplicate guard prevents refiling inflecto-ai #2334 and #2335', async () =
 });
 
 test('parseAlreadyOpenIssues parses single and multiple issue references case-insensitively', () => {
-  assert.deepEqual(parseAlreadyOpenIssues({ EVIDENCE: 'MCP response captured this run. Already open as #2286 \u2014 no new issue filed.' }), [2286]);
-  assert.deepEqual(parseAlreadyOpenIssues({ EVIDENCE: 'Desktop browser, 1920px, screenshots captured in-run. Already open as #2292 and #2293 \u2014 no new issue filed.' }), [2292, 2293]);
+  assert.deepEqual(parseAlreadyOpenIssues({ EVIDENCE: 'MCP response captured this run. Already open as #2286 — no new issue filed.' }), [2286]);
+  assert.deepEqual(parseAlreadyOpenIssues({ EVIDENCE: 'Desktop browser, 1920px, screenshots captured in-run. Already open as #2292 and #2293 — no new issue filed.' }), [2292, 2293]);
   assert.deepEqual(parseAlreadyOpenIssues({ ACTUAL: 'Already open as #1, #2' }), [1, 2]);
   assert.deepEqual(parseAlreadyOpenIssues({ REPRO: 'Already open as #1, #2 and #3' }), [1, 2, 3]);
   assert.deepEqual(parseAlreadyOpenIssues({ EVIDENCE: 'already filed as #55' }), [55]);
@@ -814,7 +814,7 @@ test('(a) finding with EVIDENCE "Already open as #2286" reports duplicate issue 
   const findingA = `TITLE: Inflecto: get_convergence_score still returns null convergence_narrative for New York (CBSA 35620)
 REPRO: 1. get_convergence_score {"cbsa_code": "35620"}
 ACTUAL: convergence_narrative is null
-EVIDENCE: MCP response captured this run. Already open as #2286 \u2014 no new issue filed.`;
+EVIDENCE: MCP response captured this run. Already open as #2286 — no new issue filed.`;
 
   const h = harness([mail(findingA, '1a1bd699b692f001', '[Muse] Spec Inflecto 2026-11-08T22:50:00Z')], {
     issues: [{ number: 2286, title: '[muse] convergence_narrative is null for 6 of 8 metros checked' }],
@@ -832,7 +832,7 @@ test('(b) finding with EVIDENCE "Already open as #2292 and #2293" reports duplic
   const findingB = `TITLE: Inflecto: /login and /login/team still show no plain-word validation error and offer two parallel paths
 REPRO: 1. Navigate to /login and /login/team
 ACTUAL: validation error missing; two parallel paths offered
-EVIDENCE: Desktop browser, 1920px, screenshots captured in-run. Already open as #2292 and #2293 \u2014 no new issue filed.`;
+EVIDENCE: Desktop browser, 1920px, screenshots captured in-run. Already open as #2292 and #2293 — no new issue filed.`;
 
   const h = harness([mail(findingB, '1a1bd699b692f001', '[Muse] Spec Inflecto 2026-11-08T22:50:00Z')], {
     issues: [
@@ -857,7 +857,7 @@ test('(c) "Already open as #9999" where #9999 is NOT in the issue list still fil
   const findingC = `TITLE: Inflecto: Unfiled issue with unknown reference
 REPRO: 1. Trigger action
 ACTUAL: Failure observed
-EVIDENCE: MCP response captured this run. Already open as #9999 \u2014 no new issue filed.`;
+EVIDENCE: MCP response captured this run. Already open as #9999 — no new issue filed.`;
 
   const h = harness([mail(findingC, 'm-c', '[Muse] Spec Inflecto 2026-11-08T22:50:00Z')], {
     issues: [{ number: 2286, title: '[muse] convergence_narrative is null for 6 of 8 metros checked' }],
@@ -891,12 +891,12 @@ test('message 1a1bd699b692f001 exact bodies with "Already open as" are reported 
   const body1 = `TITLE: Inflecto: get_convergence_score still returns null convergence_narrative for New York (CBSA 35620)
 REPRO: 1. get_convergence_score {"cbsa_code": "35620"}
 ACTUAL: convergence_narrative is null
-EVIDENCE: MCP response captured this run. Already open as #2286 \u2014 no new issue filed.`;
+EVIDENCE: MCP response captured this run. Already open as #2286 — no new issue filed.`;
 
   const body2 = `TITLE: Inflecto: /login and /login/team still show no plain-word validation error and offer two parallel paths
 REPRO: 1. Navigate to /login and /login/team
 ACTUAL: validation error missing; two parallel paths offered
-EVIDENCE: Desktop browser, 1920px, screenshots captured in-run. Already open as #2292 and #2293 \u2014 no new issue filed.`;
+EVIDENCE: Desktop browser, 1920px, screenshots captured in-run. Already open as #2292 and #2293 — no new issue filed.`;
 
   const body = `${body1}\n\n${body2}`;
   const h = harness([mail(body, '1a1bd699b692f001', '[Muse] Spec Inflecto 2026-11-08T22:50:00Z')], {
