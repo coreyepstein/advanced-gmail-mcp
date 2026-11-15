@@ -19,6 +19,83 @@ export const routes: Record<string, string> = {
   wren: 'kmdesle/wren-app', 'act-now': 'kmdesle/act-now',
 };
 
+const countWords = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+const countPattern = `(?:${countWords.join('|')}|[1-9]\\d?)`;
+function countValue(word: string): number {
+  const index = countWords.indexOf(word.toLowerCase());
+  return index >= 0 ? index + 1 : Number(word);
+}
+
+// Matches only the declaration itself, optionally with the inline note that a
+// counted list of FAIL cells cites issues that are already filed.
+function isZeroNewDeclaration(text: string): boolean {
+  const cite = ` The (${countPattern}) FAIL cells? below cites? issues? already filed: (#[1-9]\\d*(?:, #[1-9]\\d*)*)\\.`;
+  const forms = [
+    new RegExp(`^None\\. No new findings this run\\.?$`, 'i'),
+    new RegExp(`^\\(none\\) \u2014 (?:zero(?: new)?|no new) findings this run(?:\\.?|\\.${cite})$`, 'i'),
+    new RegExp(`^\\(none \u2014 (?:zero(?: new)?|no new) findings this run(?:\\.?|\\.${cite})\\)\\.?$`, 'i'),
+  ];
+  for (const form of forms) {
+    const match = text.match(form);
+    if (!match) continue;
+    if (match[1] === undefined) return true;
+    return countValue(match[1]) === match[2].split(', ').length;
+  }
+  return false;
+}
+
+// After a blank line, a declaration may be followed only by groups that explain
+// FAIL/BLOCKED coverage cells against existing issues, or one explicitly
+// unverified cell with capped counts and an explicit no-mismatch statement.
+// Each group requires its own bounded intro and matching bullets.
+function isCoverageExplanation(lines: string[]): boolean {
+  const intro = new RegExp(`^${countPattern} cells? (?:fails?|(?:is|are) blocked|(?:fail|are failing) or (?:are )?blocked) (?:against|by|on) (?:already[- ]open|already[- ]filed|existing) issues? \\(see COVERAGE, not re-reported as new findings\\):$`, 'i');
+  const bullet = /^[-*] (?=.*\b(?:fails?|failing|FAIL|blocked)\b)(?=.*#[1-9]\d*\b)(?!.*\b(?:new|unfiled|untracked|another|also|maybe|possibly|not (?:yet )?filed)\b).+$/i;
+  const unverifiedIntro = /^One cell BLOCKED:$/i;
+  const unverifiedBullet = (line: string): boolean =>
+    /^[-*] /.test(line)
+    && /\b(?:unable|could not|cannot|couldn't|not able)\b[^.!?]*\b(?:verify|verified|verification)\b/i.test(line)
+    && /\b(?:cap|caps|capped)\b/i.test(line)
+    && /\bcounts?\b/i.test(line)
+    && /(?:^|[.!?] )No mismatch was found\.(?: |$)/.test(line)
+    && !/\b(?:new|unfiled|untracked|another|also|maybe|possibly|not (?:yet )?filed|defects?|bugs?|fails?|failing|wrong|incorrect|mismatch\w*)\b|#[1-9]\d*\b/i.test(line.replace('No mismatch was found.', ''));
+  let index = 0;
+  while (index < lines.length) {
+    if (unverifiedIntro.test(lines[index])) {
+      if (!unverifiedBullet(lines[index + 1] ?? '')) return false;
+      index += 2;
+      continue;
+    }
+    if (!intro.test(lines[index])) return false;
+    let next = index + 1;
+    while (next < lines.length && bullet.test(lines[next])) next++;
+    if (next === index + 1) return false;
+    index = next;
+  }
+  return lines.length > 0;
+}
+
+function hasZeroNewFindings(lines: string[]): boolean {
+  const header = /^\s*(?:#{1,6}\s*)?(?:\*\*)?FINDINGS\s*:?\s*(?:\*\*)?\s*$/i;
+  const starts = lines.flatMap((line, index) => header.test(line) ? [index] : []);
+  if (starts.length !== 1) return false;
+  const start = starts[0];
+  // A quoted/example section cannot establish a report's zero-new verdict.
+  if (lines.slice(0, start).some(line => /^\s*(?:>|`{3,}|~{3,}|(?:for example|examples?|quotes?|quoted (?:report|text))\s*:)/i.test(line))) return false;
+  const boundary = /^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:COVERAGE|(?:Observations|Notes)\s+\(not findings\)|Observations|regression(?:s| verdicts?| results?)?)\s*:?\s*(?:\*\*)?\s*$/i;
+  const remaining = lines.slice(start + 1);
+  const end = remaining.findIndex(line => boundary.test(line));
+  const section = (end < 0 ? remaining : remaining.slice(0, end)).map(line => line.trim());
+  // Later paragraphs may only explain existing issues or explicitly unverified coverage.
+  const first = section.findIndex(line => line !== '');
+  if (first < 0) return false;
+  const gap = section.indexOf('', first);
+  const head = (gap < 0 ? section.slice(first) : section.slice(first, gap)).join(' ').replace(/\s+/g, ' ');
+  if (!isZeroNewDeclaration(head)) return false;
+  const rest = gap < 0 ? [] : section.slice(gap).filter(line => line !== '');
+  return !rest.length || isCoverageExplanation(rest);
+}
+
 // A line grammar only. Email text never becomes code, commands, or instructions.
 export function parseEmail(body: string): { findings: Finding[]; regressions: string[]; nothingFound: boolean } {
   const findings: Finding[] = [];
@@ -26,7 +103,8 @@ export function parseEmail(body: string): { findings: Finding[]; regressions: st
   let current: Finding | undefined;
   let field: Field | undefined;
   let regressionSection = false;
-  for (const line of body.replace(/\r\n/g, '\n').split('\n')) {
+  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  for (const line of lines) {
     if (/^\s*(?:#{1,6}\s*)?(?:\*\*)?regression(?:s| verdicts?| results?)?\s*:?\s*(?:\*\*)?\s*$/i.test(line)) {
       regressionSection = true;
       field = undefined;
@@ -48,7 +126,7 @@ export function parseEmail(body: string): { findings: Finding[]; regressions: st
     }
   }
   for (const finding of findings) for (const key of fields) if (finding[key] !== undefined) finding[key] = finding[key]!.trim();
-  return { findings, regressions, nothingFound: !findings.length && /\bnothing found\b/i.test(body) };
+  return { findings, regressions, nothingFound: !findings.length && (/\bnothing found\b/i.test(body) || hasZeroNewFindings(lines)) };
 }
 
 export function routeTitle(title: string, subject?: string): { repo: string; title: string } | undefined {
