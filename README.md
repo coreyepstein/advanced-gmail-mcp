@@ -475,7 +475,7 @@ using `(none)`, U+2014, and `zero findings this run` or `no new findings this ru
 are also accepted, including a counted inline note that FAIL cells cite already
 filed issues. After a blank line, the declaration may be followed only by counted
 groups such as `Two cells fail against already-open issues (see COVERAGE, not
-re-reported as new findings):` with one bullet per cell citing an `#issue`. The
+re-reported as new findings):` followed by bullets that each cite an `#issue`. The
 section ends at `COVERAGE`, `Observations (not findings)`, or `Notes (not findings)`.
 These declarations concern new findings only; FAIL/BLOCKED coverage remains
 unresolved, and finding field blocks always take precedence.

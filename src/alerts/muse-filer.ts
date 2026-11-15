@@ -44,23 +44,23 @@ function isZeroNewDeclaration(text: string): boolean {
   return false;
 }
 
-// After a blank line, a declaration may be followed only by counted groups that
-// explain FAIL/BLOCKED coverage cells against issues that are already open.
-// Each bullet must cite an issue and say fail/blocked; any other prose rejects.
+// After a blank line, a declaration may be followed only by groups that explain
+// FAIL/BLOCKED coverage cells against issues that are already open. Each group is
+// an intro line and one or more bullets; every bullet must cite an issue and say
+// fail/blocked, and any other prose rejects the declaration.
 function isExistingIssueExplanation(lines: string[]): boolean {
-  const intro = new RegExp(`^(${countPattern}) cells? (?:fails?|(?:is|are) blocked|(?:fail|are failing) or (?:are )?blocked) (?:against|by|on) (?:already[- ]open|already[- ]filed|existing) issues? \\(see COVERAGE, not re-reported as new findings\\):$`, 'i');
+  const intro = new RegExp(`^${countPattern} cells? (?:fails?|(?:is|are) blocked|(?:fail|are failing) or (?:are )?blocked) (?:against|by|on) (?:already[- ]open|already[- ]filed|existing) issues? \\(see COVERAGE, not re-reported as new findings\\):$`, 'i');
   const bullet = /^[-*] (?=.*\b(?:fails?|failing|FAIL|blocked)\b)(?=.*#[1-9]\d*\b)(?!.*\b(?:new|unfiled|untracked|another|also|maybe|possibly|not (?:yet )?filed)\b).+$/i;
   let index = 0;
-  if (!lines.length) return false;
   while (index < lines.length) {
-    const match = lines[index].match(intro);
-    if (!match) return false;
-    const expected = countValue(match[1]);
-    const bullets = lines.slice(index + 1, index + 1 + expected);
-    if (bullets.length !== expected || !bullets.every(line => bullet.test(line))) return false;
-    index += 1 + expected;
+    if (!intro.test(lines[index])) return false;
+    let next = index + 1;
+    while (next < lines.length && bullet.test(lines[next])) next++;
+    if (next === index + 1) return false;
+    if (next < lines.length && !intro.test(lines[next])) return false;
+    index = next;
   }
-  return true;
+  return lines.length > 0;
 }
 
 function hasZeroNewFindings(lines: string[]): boolean {
