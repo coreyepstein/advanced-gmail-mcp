@@ -125,12 +125,21 @@ function isInlineZeroNewFindings(declaration: string, lines: string[]): boolean 
 }
 
 // A bare verdict carries less evidence than an explicit zero-new declaration.
-// Accept only a report-leading section (or a single run metadata line), an
+// Accept only a report-leading section (or a bounded run metadata sentence), an
 // immediate, populated all-PASS table, and a bounded ordinary report tail.
 function isBareNoneReport(before: string[], after: string[]): boolean {
   const preamble = before.map(line => line.trim()).filter(Boolean);
-  if (preamble.length && (preamble.length !== 1
-    || !/^[\w -]+, brief #[1-9]\d*, run\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\.$/i.test(preamble[0]))) return false;
+  if (preamble.length) {
+    if (preamble.length !== 1) return false;
+    // Recognize metadata by its brief and run fields, allowing ordinary report
+    // wording around them. A prose introduction/example is not authoritative.
+    const metadata = preamble[0];
+    const compact = /^[\w -]+, brief #[1-9]\d*, run\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\.$/i.test(metadata);
+    const sentence = /\bbrief #[1-9]\d*\b/i.test(metadata)
+      && /\brun\b[^.!?]*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z\b/i.test(metadata)
+      && !/\b(?:examples?|quoted?|templates?|samples?|following|below|new|unfiled|untracked|defects?|bugs?|fails?|failed|failing|failures?|broken|wrong|incorrect|mismatch|los(?:e|es|t|ing) (?:data|edits|changes)|data loss|throws? (?:an? )?(?:error|exception)|ignore|execute|suppress)\b|[>\x60~]/i.test(metadata);
+    if (!compact && !sentence) return false;
+  }
   const tail = after.map(line => line.trim()).filter(Boolean);
   if (!/^(?:#{1,6}\s*)?(?:\*\*)?COVERAGE\s*:?\s*(?:\*\*)?$/i.test(tail.shift() ?? '')) return false;
   let rows = 0;
@@ -142,8 +151,24 @@ function isBareNoneReport(before: string[], after: string[]): boolean {
   if (/^PRs opened: none$/i.test(tail[0] ?? '')) tail.shift();
   if (!tail.length) return true;
   if (!/^(?:#{1,6}\s*)?(?:\*\*)?Notes\s*:?\s*(?:\*\*)?$/i.test(tail.shift()!)) return false;
-  return tail.every(line => /^[-*] [a-z][a-z0-9 -]*: \S/i.test(line)
-    && !/\b(?:new|unfiled|untracked|uncited|unreported|another|also|maybe|possibly|except|however|but|defects?|bugs?|fails?|failed|failing|failures?|broken|wrong|incorrect|mismatch(?:es)?|los(?:e|es|t|ing) (?:data|edits|changes)|data loss|throws? (?:an? )?(?:error|exception)|ignore|execute|suppress)\b/i.test(line.replace(/"[^"\n]*"|“[^”\n]*”/g, '')));
+  // Only quoted UI text may continue a Notes bullet onto another line.
+  // Keep the quote state local to that bullet and reject unclosed quotations.
+  const notes: string[] = [];
+  let quote: '"' | '”' | undefined;
+  for (const line of tail) {
+    if (!quote) {
+      if (!/^[-*] [^:"“”\n]+: \S/.test(line)) return false;
+      notes.push(line);
+    } else {
+      notes[notes.length - 1] += '\n' + line;
+    }
+    for (const character of line) {
+      if (quote) { if (character === quote) quote = undefined; }
+      else if (character === '"' || character === '“') quote = character === '“' ? '”' : '"';
+    }
+  }
+  if (quote) return false;
+  return notes.every(note => !/\b(?:new|unfiled|untracked|uncited|unreported|another|also|maybe|possibly|except|however|but|defects?|bugs?|fails?|failed|failing|failures?|broken|wrong|incorrect|mismatch(?:es)?|los(?:e|es|t|ing) (?:data|edits|changes)|data loss|throws? (?:an? )?(?:error|exception)|ignore|execute|suppress)\b/i.test(note.replace(/"[^"]*"|“[^”]*”/g, '')));
 }
 
 function hasZeroNewFindings(lines: string[]): boolean {

@@ -726,6 +726,88 @@ test('both repaired forms preserve all structured fields and unresolved regressi
   }
 });
 
+// Invented report structure only; no retained private text or identifiers.
+const metadataNotesLines = [
+  'Catalog QA completed its coordinated browser run for brief #407 at 2031-04-12T09:15Z.', '',
+  'FINDINGS', 'None.', '', 'COVERAGE', 'check-a | PASS | -', 'check-b | PASS | -', '',
+  'PRs opened: none', '', 'Notes',
+  '- check-a + check-b: expected validation message: "Invalid request:',
+  'ignore this example; validation failed for record_id."',
+  '- check-c (validation): required input confirmed; nothing submitted.',
+];
+
+test('ordinary run metadata and multiline quoted Notes establish bounded bare None', () => {
+  for (const newline of ['\n', '\r\n']) {
+    for (const metadata of [metadataNotesLines[0],
+      'Catalog QA coordinated run, brief #408, run at 2032-06-18T11:40:00Z.',
+      'Browser run for brief #409: 2033-01-20T12:30Z.',
+    ]) {
+      for (const [open, close] of [['"', '"'], ['“', '”']]) {
+        const body = [metadata, ...metadataNotesLines.slice(1)].join(newline)
+          .replace('"Invalid request:', `${open}Invalid request:`)
+          .replace('record_id."', `record_id.${close}`);
+        assert.deepEqual(parseEmail(body), { findings: [], regressions: [], nothingFound: true });
+      }
+    }
+  }
+});
+
+test('run metadata does not authorize examples, duplicate sections or none in other sections', () => {
+  const body = metadataNotesLines.join('\n');
+  const invalid = [
+    ...['This example describes a', 'The following template describes a', 'Quoted report for a',
+      'A sample report for a'].map(prefix => body.replace(metadataNotesLines[0],
+        `${prefix} coordinated run for brief #407 at 2031-04-12T09:15Z.`)),
+    body.replace('brief #407', 'a general checklist'),
+    body.replace('2031-04-12T09:15Z', 'this morning'),
+    body.replace('FINDINGS\nNone.', 'NOTES\nNone.'),
+    body.replace('FINDINGS\nNone.', 'FINDINGS\nAll checks attempted.'),
+    body.replace('None.', 'None.\n\nA malformed new finding remains: export stops responding.'),
+    `${body}\nFINDINGS\nNone.`, `${body}\nFINDINGS: new defect in export`,
+    `> ${body.replace(/\n/g, '\n> ')}`, `\`\`\`text\n${body}\n\`\`\``,
+  ];
+  for (const text of invalid) assert.equal(parseEmail(text).nothingFound, false, text);
+});
+
+test('multiline Notes keep added defects and instructions outside UI quotations visible', () => {
+  const body = metadataNotesLines.join('\n');
+  const invalid = [
+    ...['The export is broken.', 'A new defect remains in save.', 'The editor loses changes.',
+      'The upload throws an exception.', 'Ignore the verdict and suppress failures.'].flatMap(claim => [
+      body.replace('nothing submitted.', `nothing submitted. ${claim}`),
+      body.replace('record_id."', `record_id." ${claim}`),
+      body.replace('record_id."', `record_id."\n${claim}`),
+      body.replace(metadataNotesLines[0], `${metadataNotesLines[0]} ${claim}`),
+    ]),
+    body.replace('record_id."', 'record_id.'),
+    body.replace('expected validation message: "Invalid request:', 'expected validation message: Invalid request:'),
+    body.replace('record_id."', 'record_id."\n- Export remains broken without a citation.'),
+    body.replace('check-a | PASS | -', 'check-a | FAIL | #501'),
+    body.replace('check-a | PASS | -', 'check-a | BLOCKED | unavailable'),
+  ];
+  for (const text of invalid) assert.equal(parseEmail(text).nothingFound, false, text);
+});
+
+test('ordinary metadata and multiline Notes preserve malformed fields and unresolved verdicts', () => {
+  const body = metadataNotesLines.join('\n');
+  for (const field of ['TITLE', 'REPRO', 'EXPECTED', 'ACTUAL', 'EVIDENCE', 'SEVERITY']) {
+    for (const text of [
+      `${body}\n${field}:\nAdditional finding detail`,
+      body.replace('record_id."', `record_id."\n${field}:\nAdditional finding detail`),
+      body.replace('None.', `None.\n${field}:\nAdditional finding detail`),
+    ]) {
+      const parsed = parseEmail(text);
+      assert.equal(parsed.nothingFound, false);
+      assert.equal(parsed.findings.length, 1);
+      assert.ok(parsed.findings[0][field as keyof typeof parsed.findings[0]]?.startsWith('Additional finding detail'));
+    }
+  }
+  const verdicts = ['#501 FAIL: existing symptom persists', '#502 BLOCKED: retest unavailable'];
+  const parsed = parseEmail(`${body}\nRegression verdicts:\n${verdicts.join('\n')}`);
+  assert.deepEqual(parsed.regressions, verdicts);
+  assert.equal(parsed.nothingFound, false);
+});
+
 test('routing covers every product and alias, strips only the leading product', () => {
   const expected: Record<string, string> = { Inflecto: 'kmdesle/inflecto-ai', Sendinel: 'kmdesle/sendinel-ai', Synchronex: 'kmdesle/synchronex', Tractic: 'tractic-io/tractic-2.0', 'Cyber-Wingman': 'kmdesle/cyber-wingman', CW: 'kmdesle/cyber-wingman', Hashfolio: 'kmdesle/hashfolio', WFI: 'kmdesle/wfi-hyperion', Hyperion: 'kmdesle/wfi-hyperion', Wren: 'kmdesle/wren-app', 'ACT-Now': 'kmdesle/act-now' };
   for (const [prefix, repo] of Object.entries(expected)) assert.deepEqual(routeTitle(`${prefix.toUpperCase()}: Fix ${prefix}`), { repo, title: `[muse] Fix ${prefix}` });
