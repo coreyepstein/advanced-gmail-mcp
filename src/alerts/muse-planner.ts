@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { gmail_v1 } from 'googleapis';
+import { parseMuseReport, MuseProtocolError, formatMuseReportInstructionsV1 } from './muse-report.js';
 
 export interface MatrixCell {
   id: string;
@@ -264,7 +265,12 @@ export function canSelectCell(cell: MatrixCell, entry: CellLedgerEntry | undefin
   return true;
 }
 
-export function parseCoverageSection(body: string, validCellIds: Set<string>): CoverageRecord[] {
+export function parseCoverageSection(body: string, validCellIds: Set<string>, subject?: string): CoverageRecord[] {
+  const versioned = parseMuseReport(body, subject);
+  if (versioned) {
+    if (versioned.protocol.errors.length) throw new MuseProtocolError(versioned.protocol.errors);
+    return versioned.coverage.filter(row => validCellIds.has(row.cellId));
+  }
   const records: CoverageRecord[] = [];
   const lines = body.replace(/\r\n/g, '\n').split('\n');
   let inCoverage = false;
@@ -365,6 +371,8 @@ export function generateBriefText(opts: {
   weeklyCells: MatrixCell[];
   coverageRule: string;
   product?: ProductConfig;
+  /** Inactive by default; live instruction activation requires exact approval. */
+  reportVersion?: 1;
 }): string {
   const product = opts.product ?? PRODUCTS.inflecto;
   const openIssuesList = opts.openIssues.length > 0
@@ -397,7 +405,9 @@ ${product.rules.map(r => `- ${r}`).join('\n')}
 - do not re-report issues already open:
 ${openIssuesList}`);
 
-  sections.push(`## REPORT FORMAT
+  sections.push(opts.reportVersion === 1
+    ? formatMuseReportInstructionsV1({ ...product, runId: opts.runId, coverageRule: opts.coverageRule })
+    : `## REPORT FORMAT
 one email titled '${product.runSubjectPrefix} ${opts.runId}' to kevin@cyberwingman.ai from the personal Gmail, FINDINGS in TITLE/REPRO/EXPECTED/ACTUAL/EVIDENCE/SEVERITY blocks (zero findings is fine: send the email anyway), then a COVERAGE section per matrix coverage_rule.
 Start every finding's TITLE line with "${product.titlePrefix}" (example: \`TITLE: ${product.titlePrefix}${product.titleExample}\`).
 
@@ -586,7 +596,7 @@ export async function runPlanner(deps: PlannerDeps): Promise<PlannerResult> {
     .sort((a, b) => a.time - b.time);
 
   for (const mail of unprocessedMails) {
-    const records = parseCoverageSection(mail.body, validCellIds);
+    const records = parseCoverageSection(mail.body, validCellIds, mail.subject);
     const timeIso = new Date(mail.time).toISOString();
     for (const rec of records) {
       applyCoverageRecord(state.cells, rec, timeIso);
@@ -743,6 +753,7 @@ export async function runPlanner(deps: PlannerDeps): Promise<PlannerResult> {
     weeklyCells,
     coverageRule: matrix.coverage_rule,
     product,
+    reportVersion: 1,
   });
 
   // Scoreboard

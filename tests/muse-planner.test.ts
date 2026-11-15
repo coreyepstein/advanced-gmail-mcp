@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { formatMuseReportV1 } from '../src/alerts/muse-report.js';
 import {
   parseCoverageSection,
   normalizeBrief,
@@ -957,4 +958,38 @@ test('26. RETEST_ONLY budget: sendinel 60 calls, inflecto 35', async () => {
   assert.equal(inf.mode, 'RETEST_ONLY');
   assert.equal(sen.mode, 'RETEST_ONLY');
   assert(inf.mcpCalls <= 35 && sen.mcpCalls <= 60);
+});
+
+
+test('v1 zero-new report traverses actual planner consumption with FAIL/BLOCKED intact and activated v1 brief', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'planner-v1-test-'));
+  try {
+    const runId = '2026-11-08T10:00:00.000Z';
+    const body = formatMuseReportV1({ runId, findings: [], coverage: [
+      { cellId: 'known', result: 'FAIL', issueRefs: ['#101'] },
+      { cellId: 'quota', result: 'BLOCKED', issueRefs: ['approval required'] },
+    ], regressions: ['#101 FAIL: closed issue still reproduces'] });
+    const matrix = makeMatrix([makeCell('known'), makeCell('quota')]);
+    const { gh, calls } = makeGh({ matrix });
+    const statePath = join(directory, 'ledger.json');
+    const mail = { id: 'v1-synthetic', subject: `[Muse] Spec Inflecto ${runId}`, time: Date.parse(runId), body };
+    const result = await runPlanner({ gh, gmail: makeGmail([mail]), statePath, now: FIXED_NOW });
+    assert.equal(result.state.cells.known.last_result, 'FAIL');
+    assert.equal(result.state.cells.quota.last_result, 'BLOCKED');
+    assert.equal(result.state.cells.quota.last_pass, null);
+    assert.equal(result.scoreboard.fails, 1);
+    assert.equal(result.scoreboard.blocked, 1);
+    assert.deepEqual(result.state.processed_message_ids, ['v1-synthetic']);
+    assert.equal(result.brief.includes('MUSE_REPORT_VERSION: 1'), true); // activated 2026-11-15 (Kevin click)
+    assert.equal(result.brief.includes('END_MUSE_REPORT'), true);
+    assert.deepEqual(await readdir(directory), []); // dry-run did not create ledger/cursor
+    assert.ok(calls.every(args => !['edit', 'create', 'pin'].includes(args[1])));
+    for (const invalidMail of [
+      { ...mail, body: body.replace('NEW_FINDINGS: 0', 'NEW_FINDINGS: 1') },
+      { ...mail, subject: mail.subject.replace('10:00:', '11:00:') },
+    ]) {
+      await assert.rejects(runPlanner({ gh, gmail: makeGmail([invalidMail]), statePath, now: FIXED_NOW }), /Muse protocol:/);
+      assert.deepEqual(await readdir(directory), []);
+    }
+  } finally { await rm(directory, { recursive: true }); }
 });

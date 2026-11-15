@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { gmail_v1 } from 'googleapis';
+import { parseMuseReport, type MuseReport, type MuseReportMetadata } from './muse-report.js';
 
 const fields = ['TITLE', 'REPRO', 'EXPECTED', 'ACTUAL', 'EVIDENCE', 'SEVERITY'] as const;
 export const RECOVERY_LOOKBACK_DAYS = 14;
@@ -203,7 +204,9 @@ function hasZeroNewFindings(lines: string[]): boolean {
 }
 
 // A line grammar only. Email text never becomes code, commands, or instructions.
-export function parseEmail(body: string): { findings: Finding[]; regressions: string[]; nothingFound: boolean } {
+export function parseEmail(body: string, subject?: string): { findings: Finding[]; regressions: string[]; nothingFound: boolean; protocol?: MuseReport['protocol'] } {
+  const versioned = parseMuseReport(body, subject);
+  if (versioned) return versioned;
   const findings: Finding[] = [];
   const regressions: string[] = [];
   let current: Finding | undefined;
@@ -345,6 +348,7 @@ export interface Run {
   regressions: { message_id: string; verdict: string }[];
   skipped: { message_id: string; reason: string }[];
   planned: { message_id: string; title: string; repo: string; body: string; labels: string[] }[];
+  reports?: ({ message_id: string } & MuseReportMetadata)[];
   error?: string;
   failing_step?: string;
   error_code?: string;
@@ -400,7 +404,14 @@ export async function runFiler(deps: {
         continue;
       }
       if (!mail.subject.startsWith('[Muse] Spec')) continue;
-      const parsed = parseEmail(mail.body);
+      const parsed = parseEmail(mail.body, mail.subject);
+      if (parsed.protocol?.errors.length) {
+        report({ message_id: mail.id, title: '', action: 'malformed', reason: `Muse protocol: ${parsed.protocol.errors.join(', ')}` });
+        continue; // Leave the entire report pending for review; no filing or label writes.
+      }
+      if (parsed.protocol?.metadata) {
+        (run.reports ??= []).push({ message_id: mail.id, ...parsed.protocol.metadata });
+      }
       for (const verdict of parsed.regressions) {
         const item = { message_id: mail.id, verdict };
         run.regressions.push(item); output({ regression: item });
