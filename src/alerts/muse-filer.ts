@@ -45,19 +45,31 @@ function isZeroNewDeclaration(text: string): boolean {
 }
 
 // After a blank line, a declaration may be followed only by groups that explain
-// FAIL/BLOCKED coverage cells against issues that are already open. Each group is
-// an intro line and one or more bullets; every bullet must cite an issue and say
-// fail/blocked, and any other prose rejects the declaration.
-function isExistingIssueExplanation(lines: string[]): boolean {
+// FAIL/BLOCKED coverage cells against existing issues, or one explicitly
+// unverified cell with capped counts and an explicit no-mismatch statement.
+// Each group requires its own bounded intro and matching bullets.
+function isCoverageExplanation(lines: string[]): boolean {
   const intro = new RegExp(`^${countPattern} cells? (?:fails?|(?:is|are) blocked|(?:fail|are failing) or (?:are )?blocked) (?:against|by|on) (?:already[- ]open|already[- ]filed|existing) issues? \\(see COVERAGE, not re-reported as new findings\\):$`, 'i');
   const bullet = /^[-*] (?=.*\b(?:fails?|failing|FAIL|blocked)\b)(?=.*#[1-9]\d*\b)(?!.*\b(?:new|unfiled|untracked|another|also|maybe|possibly|not (?:yet )?filed)\b).+$/i;
+  const unverifiedIntro = /^One cell BLOCKED:$/i;
+  const unverifiedBullet = (line: string): boolean =>
+    /^[-*] /.test(line)
+    && /\b(?:unable|could not|cannot|couldn't|not able)\b[^.!?]*\b(?:verify|verified|verification)\b/i.test(line)
+    && /\b(?:cap|caps|capped)\b/i.test(line)
+    && /\bcounts?\b/i.test(line)
+    && /(?:^|[.!?] )No mismatch was found\.(?: |$)/.test(line)
+    && !/\b(?:new|unfiled|untracked|another|also|maybe|possibly|not (?:yet )?filed|defects?|bugs?|fails?|failing|wrong|incorrect|mismatch\w*)\b|#[1-9]\d*\b/i.test(line.replace('No mismatch was found.', ''));
   let index = 0;
   while (index < lines.length) {
+    if (unverifiedIntro.test(lines[index])) {
+      if (!unverifiedBullet(lines[index + 1] ?? '')) return false;
+      index += 2;
+      continue;
+    }
     if (!intro.test(lines[index])) return false;
     let next = index + 1;
     while (next < lines.length && bullet.test(lines[next])) next++;
     if (next === index + 1) return false;
-    if (next < lines.length && !intro.test(lines[next])) return false;
     index = next;
   }
   return lines.length > 0;
@@ -74,14 +86,14 @@ function hasZeroNewFindings(lines: string[]): boolean {
   const remaining = lines.slice(start + 1);
   const end = remaining.findIndex(line => boundary.test(line));
   const section = (end < 0 ? remaining : remaining.slice(0, end)).map(line => line.trim());
-  // First paragraph is the declaration; later paragraphs may only explain existing-issue cells.
+  // Later paragraphs may only explain existing issues or explicitly unverified coverage.
   const first = section.findIndex(line => line !== '');
   if (first < 0) return false;
   const gap = section.indexOf('', first);
   const head = (gap < 0 ? section.slice(first) : section.slice(first, gap)).join(' ').replace(/\s+/g, ' ');
   if (!isZeroNewDeclaration(head)) return false;
   const rest = gap < 0 ? [] : section.slice(gap).filter(line => line !== '');
-  return !rest.length || isExistingIssueExplanation(rest);
+  return !rest.length || isCoverageExplanation(rest);
 }
 
 // A line grammar only. Email text never becomes code, commands, or instructions.

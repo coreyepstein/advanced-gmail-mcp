@@ -209,6 +209,12 @@ const realShapeReports = {
     'Observations (not findings):', 'known detail', 'COVERAGE', 'login | FAIL | #101', 'export | FAIL | #102', 'search | FAIL | #103'],
   notesBoundary: ['FINDINGS', '(none \u2014 zero findings this run)', '',
     'Notes (not findings):', '- known run detail', '', 'COVERAGE', 'login | PASS | -'],
+  unverifiedCell: ['FINDINGS', '', 'None. No new findings this run.', '',
+    'Two cells fail against already-open issues (see COVERAGE, not re-reported as new findings):',
+    '- login fails on #101: existing defect.', '- export fails on #102: existing defect.', '',
+    'One cell BLOCKED:',
+    '- Catalog totals: unable to verify the advertised total of 24 entries. Cannot read the complete counts through capped tool outputs. No mismatch was found. The sample claim is "24 catalog entries". The available output contains "8 entries".', '',
+    'COVERAGE', 'login | FAIL | #101', 'export | FAIL | #102', 'catalog totals | BLOCKED | incomplete output'],
 };
 const realShape = (lines: string[]) => lines.join('\r\n');
 
@@ -266,6 +272,31 @@ test('real-report shapes still surface findings, malformed blocks and contradict
   assert.deepEqual(run.results.map(({ action }) => action), messages.map(() => 'malformed'));
   assert.deepEqual(run.planned, []);
   assert.deepEqual(h.calls, []);
+});
+
+test('unverified BLOCKED coverage requires all evidence markers and never hides defect commentary', () => {
+  const lines = realShapeReports.unverifiedCell;
+  const blocked = lines.find(line => line.startsWith('- Catalog totals:'))!;
+  const body = realShape(lines);
+  for (const replacement of [
+    blocked.replace('No mismatch was found.', ''),
+    blocked.replace('unable', 'able').replace('Cannot', 'Can'),
+    blocked.replace('verify', 'inspect'),
+    blocked.replace('capped', 'available'),
+    blocked.replace('counts', 'rows'),
+    `${blocked} A new defect is unfiled.`,
+    `${blocked} The total is incorrect.`,
+    `${blocked} A mismatch exists in the export.`,
+    `${blocked} Save fails without an issue.`,
+    `${blocked}\r\n- An unfiled defect remains.`,
+    `${blocked}\r\nArbitrary commentary.`,
+  ]) assert.equal(parseEmail(body.replace(blocked, replacement)).nothingFound, false);
+  assert.equal(parseEmail(body.replace('One cell BLOCKED:', 'One cell:')).nothingFound, false);
+  assert.equal(parseEmail(body.replace('None. No new findings this run.', 'None.')).nothingFound, false);
+  const verdicts = ['#101 FAIL: existing defect remains', '#102 BLOCKED: check unavailable'];
+  assert.deepEqual(parseEmail(`${body}\r\nRegression verdicts:\r\n${verdicts.join('\r\n')}`), {
+    findings: [], regressions: verdicts, nothingFound: true,
+  });
 });
 
 test('routing covers every product and alias, strips only the leading product', () => {
