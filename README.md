@@ -473,7 +473,7 @@ never filed. Reports with no new findings may use `Nothing found.` or a standalo
 `FINDINGS` header followed by `None. No new findings this run.`. Bounded forms
 using `(none)`, U+2014, and `zero findings this run` or `no new findings this run`
 are also accepted, including a counted inline note that FAIL cells cite already
-filed issues. After a blank line, the declaration may be followed only by counted
+filed issues. After a blank line, the declaration may be followed only by
 groups such as `Two cells fail against already-open issues (see COVERAGE, not
 re-reported as new findings):` followed by bullets that each cite an `#issue`. The
 section ends at `COVERAGE`, `Observations (not findings)`, or `Notes (not findings)`.
