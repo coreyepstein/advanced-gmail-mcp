@@ -482,11 +482,15 @@ unresolved, and finding field blocks always take precedence.
 The report-leading inline form `FINDINGS: none - no new issues found in this run.`
 is accepted when it continues with `The four failing cells cite already-open
 issues (see COVERAGE, not re-reported as new findings):` (other positive counts
-are allowed) and citation-bearing bullets. Each bullet must describe an existing
-symptom, mismatch, defect, failure, or outage; a follow-up such as `#104 also
-still reproduces: existing validation placement defect.` is allowed. One bullet
-may explain several coverage cells. Missing citations, additional defect prose,
-duplicate FINDINGS headers, and quoted/example inline verdicts remain invalid.
+are allowed) and bullets led by a cell failure/blockage and an `#issue` reference.
+Evidence may use normal prose, timestamps, numeric comparisons, and quoted UI
+messages; no literal `existing symptom` phrase is required. A follow-up such as
+`#104 also still reproduces: the warning renders beside the wrong field.` needs
+its own reference. One bullet may explain several coverage cells. Explicit new,
+unfiled, or ambiguous defects and uncited independent failure assertions remain
+invalid, as do missing citations, duplicate FINDINGS headers, and quoted/example
+inline verdicts. A closed issue whose symptom persists remains an unresolved
+regression; recognizing a zero-new verdict never turns its coverage into PASS.
 Attachments and HTML-only messages are not parsed; send inline `text/plain`.
 
 Routes (verified with read-only `gh repo view` on November 8, 2026; checked again

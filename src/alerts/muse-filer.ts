@@ -77,20 +77,31 @@ function isCoverageExplanation(lines: string[]): boolean {
 }
 
 // The inline report form attaches its existing-issue intro to the verdict.
-// Keep every explanation clause citation-led and explicitly about an existing
-// symptom. One bullet may cover several cells; counts are not bullet counts.
+// Each bullet scopes evidence to an actual issue, including separately cited
+// reproductions. One bullet may cover several cells; counts are not bullet counts.
 function isInlineZeroNewFindings(declaration: string, lines: string[]): boolean {
   const intro = new RegExp(`^none - no new issues found in this run\\. The ${countPattern} failing cells? cite already-open issues \\(see COVERAGE, not re-reported as new findings\\):$`, 'i');
   if (!intro.test(declaration)) return false;
   const issue = '#[1-9]\\d*';
-  const symptom = 'existing (?:[a-z-]+ ){0,3}(?:symptom|mismatch|defect|failure|outage)\\.';
-  const bullet = new RegExp(`^[-*] [a-z][a-z0-9 -]* (?:fails? on|(?:is |are )?blocked by) ${issue}(?: \\(closed, symptom persists\\))?: ${symptom}(?: ${issue} also still reproduces: ${symptom})*(?: No external action\\.)?$`, 'i');
-  const ambiguous = /\b(?:new|unfiled|untracked|another|maybe|possibly|not|no|and|but|except|unrelated)\b/i;
+  const bullet = new RegExp(`^[-*] [a-z][a-z0-9 -]* (?:fails? on|(?:is |are )?blocked by) ${issue}(?: \\(closed, symptom persists\\))?: (\\S.*)$`, 'i');
+  const reproduction = new RegExp(` ${issue} also still reproduces: `, 'i');
+  const ambiguous = /\b(?:new|unfiled|untracked|uncited|unreported|another|also|maybe|possibly|unrelated|not (?:yet )?filed|except|however|but)\b|\b(?:additional|separate|different) (?:issue|defect|bug|failure)\b/i;
+  const defect = /\b(?:defects?|bugs?|fails?|failed|failing|failures?|broken|wrong|incorrect|mismatches?|los(?:e|es|t|ing) (?:data|edits|changes)|data loss|throws? (?:an? )?(?:error|exception))\b/i;
+  const continuation = /\b(?:existing|still|same|remains?|continues?|persists?)\b|^(?:these|those|both|it|its|no|zero|0)\b/i;
   const explanations = lines.map(line => line.trim()).filter(Boolean);
   return explanations.length > 0 && explanations.every(line => {
-    // Conjunctions in cell names are fine; symptom prose must stay bounded.
-    const prose = line.slice(line.indexOf(':') + 1).replace(/ No external action\.$/i, '');
-    return bullet.test(line) && !ambiguous.test(prose);
+    const match = line.match(bullet);
+    if (!match) return false;
+    return match[1].split(reproduction).every(prose => {
+      // A citation covers ordinary evidence prose, not a claim of a new issue
+      // or an uncited second reproduction. No email text is ever executed.
+      if (!prose.trim() || ambiguous.test(prose) || /#\d|\balso still reproduces\b/i.test(prose)) return false;
+      // UI message punctuation is data, not a new narrative assertion.
+      const clauses = prose.replace(/"[^"\n]*"|“[^”\n]*”/g, '""').split(/(?<=[.!?])\s+|;\s*|\s+(?:and|but)\s+/i);
+      // A later independent defect assertion needs a citation of its own;
+      // continuing evidence and explicit negative observations stay in scope.
+      return clauses.every((clause, index) => index === 0 || !defect.test(clause) || continuation.test(clause));
+    });
   });
 }
 

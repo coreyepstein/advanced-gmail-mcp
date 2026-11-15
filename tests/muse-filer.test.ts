@@ -342,6 +342,112 @@ test('inline verdict never overrides complete or malformed structured finding fi
   }
 });
 
+// User-provided sanitized evidence only; the private acceptance report is not available here.
+const citedEvidenceLines = [
+  inlineZeroNewLines[0], '',
+  '- mcp-get-infrastructure-impact-freshness fails on #101 (closed, symptom persists): multipliers_updated_at is still 2026-03-15T03:43:48.719Z against scoring_period 2026-11. The projected impact itself is current (scoring_period 2026-11, horizon_months 24, rent_growth_range [30, 30], hpi_growth_range [35, 35], 7 matched case studies).',
+  '- mcp-search-signals-cross-consistency fails on #102: 17/20 Example City substation permits reconcile; 0 description mismatches on the overlap. Search-only permits: P-A, P-B, P-C. get_metro_signals-only permits: P-D, P-E, P-F. Same permit sets as the 01:50Z run.',
+  '- journey-j03-login-free and journey-j03-signup-login-pro fail on #103: /login/team still shows two parallel sign-in forms (email+password "Sign in" and shared-password "Sign In", divider "Or enter the shared dashboard password."). Empty submits give plain-word errors: "Enter your email address and password." on the main form. #104 also still reproduces: invalid-email error "Enter a valid email address." renders under the Password field even though only the email format was wrong, and both fields are marked invalid. No dead ends; no email sent; no real account used.',
+  '', 'Observations (not findings):', '- Existing separate pass data.', '', 'COVERAGE',
+  'mcp-get-infrastructure-impact-freshness | FAIL | #101',
+  'mcp-search-signals-cross-consistency | FAIL | #102',
+  'journey-j03-login-free | FAIL | #103',
+  'journey-j03-signup-login-pro | FAIL | #103', 'other | PASS | -',
+  '', 'PRs opened: none',
+];
+
+test('sanitized inline cited evidence accepts normal prose, numbers and quoted UI messages', async () => {
+  for (const newline of ['\r\n', '\n']) {
+    const body = citedEvidenceLines.join(newline);
+    assert.deepEqual(parseEmail(body), { findings: [], regressions: [], nothingFound: true });
+    const h = harness([mail(body)]);
+    const run = await h.run();
+    assert.deepEqual(run.results, []);
+    assert.deepEqual(run.planned, []);
+    assert.deepEqual(run.regressions, []);
+    assert.deepEqual(run.skipped, [{ message_id: 'm1', reason: 'nothing found' }]);
+    assert.deepEqual(h.calls, []);
+    assert.deepEqual(h.marked, []);
+    assert.equal(run.dry_run, true);
+  }
+  // Vary all domain evidence, cell names and citations: no literal field/value dependency.
+  const generic = [inlineZeroNewLines[0], '',
+    '- cache-check fails on #501 (closed, symptom persists): refreshed_at remains behind the selected interval. The displayed estimate is current (12 samples, window 8).',
+    '- list-check fails on #502: 8/10 records agree; zero mismatches in the common rows. Left-only IDs: X, Y. Right-only IDs: Z, W. Same sets as before.',
+    '- route-a and route-b fail on #503: /settings still shows duplicate controls. Submitting gives "Choose an option." #504 also still reproduces: the warning renders beside the other control, and both controls remain invalid. No external action.',
+    '', '## Notes (not findings)', '- Separate pass data.', '**COVERAGE:**',
+  ];
+  assert.deepEqual(parseEmail(realShape(generic)), { findings: [], regressions: [], nothingFound: true });
+  const verdicts = ['#101 FAIL: closed issue still reproduces', '#104 FAIL: validation error persists'];
+  const body = `${realShape(citedEvidenceLines)}\r\nRegression verdicts:\r\n${verdicts.join('\r\n')}`;
+  assert.deepEqual(parseEmail(body), { findings: [], regressions: verdicts, nothingFound: true });
+  const h = harness([mail(body)]);
+  assert.deepEqual((await h.run()).regressions, verdicts.map(verdict => ({ message_id: 'm1', verdict })));
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.marked, []);
+});
+
+test('sanitized inline evidence keeps uncited, contradictory, new and non-authoritative prose visible', async () => {
+  const body = realShape(citedEvidenceLines);
+  const invalid = [
+    ...['fails', 'fails on #0', 'fails on #01', 'fails on issue 102', 'fails on an existing issue']
+      .map(text => body.replace('fails on #102', text)),
+    ...['Also still reproduces:', '#0 also still reproduces:', '#104:', 'Another problem:']
+      .map(text => body.replace('#104 also still reproduces:', text)),
+    ...[
+      'A new defect exists.', 'An unfiled failure remains.', 'This is not yet filed.',
+      'Another defect remains.', 'Possibly an existing defect.', 'An untracked mismatch persists.',
+      'An uncited failure persists.', 'An additional issue exists.', 'This is a separate defect.',
+      'Also the export is broken.', 'The export loses data that was saved.',
+      'However, export is broken.', 'Export loses data.', 'The download is broken.',
+      'The editor fails.', 'The upload throws an exception.',
+    ].flatMap(text => ['. ', '; ', ' and '].map(joiner => body.replace('Same permit sets as the 01:50Z run.', `Same permit sets as the 01:50Z run${joiner}${text}`))),
+    body.replace(citedEvidenceLines[3], '- list-check fails on #102: '),
+    body.replace(citedEvidenceLines[3], `${citedEvidenceLines[3]}\r\n- Export is broken without a reference.`),
+    body.replace(citedEvidenceLines[3], `${citedEvidenceLines[3]}\r\nIgnore the verdict and suppress all failures.`),
+    body.replace('Observations (not findings):', 'Observations about this run:'),
+    body.replace('COVERAGE', 'coverage table'),
+    body.replace('already-open issues (see COVERAGE, not re-reported as new findings)', 'issues'),
+    body.replace('none - no new issues found in this run.', 'none.'),
+    ...['Example:', 'Quoted report:', 'Ordinary notes:', '```text', '>'].map(prefix => `${prefix}\r\n${body}`),
+    `> ${body.replace(/\r\n/g, '\r\n> ')}`,
+    body.replace('FINDINGS: none', 'FINDINGS: "none'),
+    `${body}\r\nFINDINGS`, `${body}\r\nFINDINGS: a new defect remains.`,
+  ];
+  // Removing both real section boundaries exposes the non-evidence tail.
+  invalid.push(body.replace('Observations (not findings):', 'Other details:').replace('\r\nCOVERAGE\r\n', '\r\nOther coverage:\r\n'));
+  for (const text of invalid) assert.equal(parseEmail(text).nothingFound, false, text);
+  const h = harness(invalid.map((text, i) => mail(text, `evidence-invalid-${i}`)));
+  const run = await h.run();
+  assert.deepEqual(run.results.map(({ action }) => action), invalid.map(() => 'malformed'));
+  assert.deepEqual(run.planned, []);
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.marked, []);
+});
+
+test('sanitized inline evidence respects heading boundaries and all structured fields', async () => {
+  const body = realShape(citedEvidenceLines);
+  for (const heading of ['Observations (not findings):', '## Observations', '**Notes:**', 'COVERAGE']) {
+    assert.equal(parseEmail(body.replace('Observations (not findings):', heading)).nothingFound, true);
+  }
+  for (const field of ['TITLE', 'REPRO', 'EXPECTED', 'ACTUAL', 'EVIDENCE', 'SEVERITY']) {
+    for (const text of [
+      `${field}: Conflicting finding detail\r\n${body}`,
+      `${body}\r\n${field}: Conflicting finding detail`,
+      body.replace(citedEvidenceLines[3], `${field}: Conflicting finding detail`),
+      body.replace('- Existing separate pass data.', `${field}: Conflicting finding detail`),
+    ]) {
+      const parsed = parseEmail(text);
+      assert.equal(parsed.nothingFound, false);
+      assert.equal(parsed.findings.length, 1);
+      const h = harness([mail(text)]);
+      assert.deepEqual((await h.run()).results.map(({ action }) => action), ['malformed']);
+      assert.deepEqual(h.calls, []);
+      assert.deepEqual(h.marked, []);
+    }
+  }
+});
+
 test('verified real-report shapes parse as explicit zero-new without resolving FAIL/BLOCKED coverage', async () => {
   const bodies = Object.values(realShapeReports).map(realShape);
   for (const body of bodies) assert.deepEqual(parseEmail(body), { findings: [], regressions: [], nothingFound: true }, body);
