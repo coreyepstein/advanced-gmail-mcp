@@ -86,7 +86,7 @@ function isInlineZeroNewFindings(declaration: string, lines: string[]): boolean 
   const bullet = new RegExp(`^[-*] [a-z][a-z0-9 -]* (?:fails? on|(?:is |are )?blocked by) ${issue}(?: \\(closed, symptom persists\\))?: (\\S.*)$`, 'i');
   const reproduction = new RegExp(` ${issue} also still reproduces: `, 'i');
   const ambiguous = /\b(?:new|unfiled|untracked|uncited|unreported|another|also|maybe|possibly|unrelated|not (?:yet )?filed|except|however|but)\b|\b(?:additional|separate|different) (?:issue|defect|bug|failure)\b/i;
-  const defect = /\b(?:defects?|bugs?|fails?|failed|failing|failures?|broken|wrong|incorrect|mismatches?|los(?:e|es|t|ing) (?:data|edits|changes)|data loss|throws? (?:an? )?(?:error|exception))\b/i;
+  const defect = /\b(?:defects?|bugs?|fails?|failed|failing|failures?|broken|wrong|incorrect|mismatch(?:es)?|los(?:e|es|t|ing) (?:data|edits|changes)|data loss|throws? (?:an? )?(?:error|exception))\b/i;
   const continuation = /\b(?:existing|still|same|remains?|continues?|persists?)\b|^(?:these|those|both|it|its|no|zero|0)\b/i;
   const explanations = lines.map(line => line.trim()).filter(Boolean);
   return explanations.length > 0 && explanations.every(line => {

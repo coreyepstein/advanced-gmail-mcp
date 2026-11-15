@@ -399,6 +399,7 @@ test('sanitized inline evidence keeps uncited, contradictory, new and non-author
       'Another defect remains.', 'Possibly an existing defect.', 'An untracked mismatch persists.',
       'An uncited failure persists.', 'An additional issue exists.', 'This is a separate defect.',
       'Also the export is broken.', 'The export loses data that was saved.',
+      'A mismatch exists in the export.', 'The export has mismatches.',
       'However, export is broken.', 'Export loses data.', 'The download is broken.',
       'The editor fails.', 'The upload throws an exception.',
     ].flatMap(text => ['. ', '; ', ' and '].map(joiner => body.replace('Same permit sets as the 01:50Z run.', `Same permit sets as the 01:50Z run${joiner}${text}`))),
