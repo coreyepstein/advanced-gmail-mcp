@@ -76,9 +76,39 @@ function isCoverageExplanation(lines: string[]): boolean {
   return lines.length > 0;
 }
 
+// The inline report form attaches its existing-issue intro to the verdict.
+// Each bullet scopes evidence to an actual issue, including separately cited
+// reproductions. One bullet may cover several cells; counts are not bullet counts.
+function isInlineZeroNewFindings(declaration: string, lines: string[]): boolean {
+  const intro = new RegExp(`^none - no new issues found in this run\\. The ${countPattern} failing cells? cite already-open issues \\(see COVERAGE, not re-reported as new findings\\):$`, 'i');
+  if (!intro.test(declaration)) return false;
+  const issue = '#[1-9]\\d*';
+  const bullet = new RegExp(`^[-*] [a-z][a-z0-9 -]* (?:fails? on|(?:is |are )?blocked by) ${issue}(?: \\(closed, symptom persists\\))?: (\\S.*)$`, 'i');
+  const reproduction = new RegExp(` ${issue} also still reproduces: `, 'i');
+  const ambiguous = /\b(?:new|unfiled|untracked|uncited|unreported|another|also|maybe|possibly|unrelated|not (?:yet )?filed|except|however|but)\b|\b(?:additional|separate|different) (?:issue|defect|bug|failure)\b/i;
+  const defect = /\b(?:defects?|bugs?|fails?|failed|failing|failures?|broken|wrong|incorrect|mismatch(?:es)?|los(?:e|es|t|ing) (?:data|edits|changes)|data loss|throws? (?:an? )?(?:error|exception))\b/i;
+  const continuation = /\b(?:existing|still|same|remains?|continues?|persists?)\b|^(?:these|those|both|it|its|no|zero|0)\b/i;
+  const explanations = lines.map(line => line.trim()).filter(Boolean);
+  return explanations.length > 0 && explanations.every(line => {
+    const match = line.match(bullet);
+    if (!match) return false;
+    return match[1].split(reproduction).every(prose => {
+      // A citation covers ordinary evidence prose, not a claim of a new issue
+      // or an uncited second reproduction. No email text is ever executed.
+      if (!prose.trim() || ambiguous.test(prose) || /#\d|\balso still reproduces\b/i.test(prose)) return false;
+      // UI message punctuation is data, not a new narrative assertion.
+      const clauses = prose.replace(/"[^"\n]*"|“[^”\n]*”/g, '""').split(/(?<=[.!?])\s+|;\s*|\s+(?:and|but)\s+/i);
+      // A later independent defect assertion needs a citation of its own;
+      // continuing evidence and explicit negative observations stay in scope.
+      return clauses.every((clause, index) => index === 0 || !defect.test(clause) || continuation.test(clause));
+    });
+  });
+}
+
 function hasZeroNewFindings(lines: string[]): boolean {
   const header = /^\s*(?:#{1,6}\s*)?(?:\*\*)?FINDINGS\s*:?\s*(?:\*\*)?\s*$/i;
-  const starts = lines.flatMap((line, index) => header.test(line) ? [index] : []);
+  const inlineHeader = /^\s*(?:#{1,6}\s*)?(?:\*\*)?FINDINGS\s*:\s*(\S.*?)\s*$/i;
+  const starts = lines.flatMap((line, index) => header.test(line) || inlineHeader.test(line) ? [index] : []);
   if (starts.length !== 1) return false;
   const start = starts[0];
   // A quoted/example section cannot establish a report's zero-new verdict.
@@ -87,6 +117,13 @@ function hasZeroNewFindings(lines: string[]): boolean {
   const remaining = lines.slice(start + 1);
   const end = remaining.findIndex(line => boundary.test(line));
   const section = (end < 0 ? remaining : remaining.slice(0, end)).map(line => line.trim());
+  const inline = header.test(lines[start]) ? null : lines[start].match(inlineHeader);
+  if (inline) {
+    // Only a report-leading inline verdict is authoritative, never a later
+    // occurrence inside ordinary prose, notes, a quotation, or an example.
+    return lines.slice(0, start).every(line => !line.trim())
+      && isInlineZeroNewFindings(inline[1], section);
+  }
   // Later paragraphs may only explain existing issues or explicitly unverified coverage.
   const first = section.findIndex(line => line !== '');
   if (first < 0) return false;
