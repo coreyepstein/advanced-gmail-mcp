@@ -472,7 +472,11 @@ one verdict per line with an existing `#issue` number; these lines are logged,
 never filed. Reports with no new findings may use `Nothing found.` or a standalone
 `FINDINGS` header followed by `None. No new findings this run.`. Bounded forms
 using `(none)`, U+2014, and `zero findings this run` or `no new findings this run`
-are also accepted, including the three-issue explanation of existing FAIL cells.
+are also accepted, including a counted inline note that FAIL cells cite already
+filed issues. After a blank line, the declaration may be followed only by counted
+groups such as `Two cells fail against already-open issues (see COVERAGE, not
+re-reported as new findings):` with one bullet per cell citing an `#issue`. The
+section ends at `COVERAGE`, `Observations (not findings)`, or `Notes (not findings)`.
 These declarations concern new findings only; FAIL/BLOCKED coverage remains
 unresolved, and finding field blocks always take precedence.
 Attachments and HTML-only messages are not parsed; send inline `text/plain`.

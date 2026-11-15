@@ -191,6 +191,81 @@ test('incidental, quoted, example, contradictory and gibberish declarations stil
   assert.deepEqual(h.marked, messages.map(({ id }) => id));
 });
 
+// Synthetic CRLF copies of three verified real-report shapes (details and IDs invented).
+const realShapeReports = {
+  explainedCells: ['FINDINGS', '', 'None. No new findings this run.', '',
+    'Two cells fail against already-open issues (see COVERAGE, not re-reported as new findings):',
+    '- login fails on #101: existing defect.', '- export fails on #102: existing defect.', '',
+    'One cell is blocked by already-open issues (see COVERAGE, not re-reported as new findings):',
+    '- search BLOCKED by #103: existing outage.', '',
+    'Observations (not findings):', 'known detail', '',
+    'COVERAGE', 'login | FAIL | #101', 'export | FAIL | #102', 'search | BLOCKED | #103'],
+  parentheticalCite: ['FINDINGS',
+    '(none — no new findings this run. The three FAIL cells below cite issues already filed: #101, #102, #103.)', '',
+    'Observations (not findings):', 'known detail', 'COVERAGE', 'login | FAIL | #101', 'export | FAIL | #102', 'search | FAIL | #103'],
+  notesBoundary: ['FINDINGS', '(none — zero findings this run)', '',
+    'Notes (not findings):', '- known run detail', '', 'COVERAGE', 'login | PASS | -'],
+};
+const realShape = (lines: string[]) => lines.join('\r\n');
+
+test('verified real-report shapes parse as explicit zero-new without resolving FAIL/BLOCKED coverage', async () => {
+  const bodies = Object.values(realShapeReports).map(realShape);
+  for (const body of bodies) assert.deepEqual(parseEmail(body), { findings: [], regressions: [], nothingFound: true }, body);
+  const minimal = realShape(['FINDINGS', '', 'None. No new findings this run.', '',
+    'Two cells fail against already-open issues (see COVERAGE, not re-reported as new findings):',
+    '- login fails on #101: existing defect.', '', 'Observations (not findings):', 'known detail', '', 'COVERAGE', 'login | FAIL | #101']);
+  assert.equal(parseEmail(minimal).nothingFound, false, 'count must match bullets');
+  const messages = bodies.map((body, index) => mail(body, `shape-${index}`));
+  const h = harness(messages, { apply: true });
+  const run = await h.run();
+  assert.deepEqual(run.results, []);
+  assert.deepEqual(run.planned, []);
+  assert.deepEqual(run.regressions, []);
+  assert.deepEqual(run.skipped, messages.map(({ id }) => ({ message_id: id, reason: 'nothing found' })));
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.marked, messages.map(({ id }) => id));
+});
+
+test('real-report shapes still surface findings, malformed blocks and contradictory explanations', async () => {
+  const finding = 'TITLE: Wren: Save ignores edits\r\nREPRO: Edit and save\r\nACTUAL: Edits are lost';
+  for (const lines of Object.values(realShapeReports)) {
+    const body = realShape(lines);
+    for (const withFinding of [`${body}\r\n${finding}`, `${finding}\r\n${body}`]) {
+      assert.equal(parseEmail(withFinding).nothingFound, false);
+      const run = await harness([mail(withFinding)]).run();
+      assert.deepEqual(run.planned.map(({ title }) => title), ['[muse] Save ignores edits']);
+    }
+    const malformed = harness([mail(`${body}\r\nREPRO: Open editor\r\nACTUAL: Edits are lost`)], { apply: true });
+    assert.deepEqual((await malformed.run()).results.map(({ action }) => action), ['malformed']);
+    assert.deepEqual(malformed.calls, []);
+  }
+  const [first, second, third] = [realShapeReports.explainedCells, realShapeReports.parentheticalCite, realShapeReports.notesBoundary];
+  const swap = (lines: string[], from: string, to: string) => realShape(lines.map(line => line === from ? to : line));
+  const bodies = [
+    swap(first, '- login fails on #101: existing defect.', '- login fails on #101: also a new defect, not yet filed.'),
+    swap(first, '- login fails on #101: existing defect.', '- login fails: existing defect.'),
+    swap(first, '- login fails on #101: existing defect.', '- login looks slow on #101.'),
+    swap(first, '- login fails on #101: existing defect.', '- login fails on #101: existing defect.\r\nA new failure also exists.'),
+    swap(first, 'Two cells fail against already-open issues (see COVERAGE, not re-reported as new findings):', 'Two cells fail against already-open issues:'),
+    swap(first, 'Two cells fail against already-open issues (see COVERAGE, not re-reported as new findings):', 'Two cells fail (see COVERAGE, not re-reported as new findings):'),
+    swap(first, 'None. No new findings this run.', 'None.'),
+    swap(second, second[1], '(none — no new findings this run. The three FAIL cells below cite issues already filed: #101, #102.)'),
+    swap(second, second[1], '(none — no new findings this run. The three FAIL cells below cite issues already filed: #101, #102, #103. One is new.)'),
+    swap(second, second[1], '(none — no new findings this run. The three FAIL cells below cite issues already filed: #101, #102, #103.'),
+    swap(third, '(none — zero findings this run)', '(none — zero findings this run)\r\n\r\nOne new failure remains.'),
+    swap(third, 'Notes (not findings):', 'Notes:'),
+    `> ${realShape(first).replace(/\r\n/g, '\r\n> ')}`,
+    `Example:\r\n${realShape(third)}`,
+  ];
+  for (const body of bodies) assert.equal(parseEmail(body).nothingFound, false, body);
+  const messages = bodies.map((body, index) => mail(body, `contra-${index}`));
+  const h = harness(messages, { apply: true });
+  const run = await h.run();
+  assert.deepEqual(run.results.map(({ action }) => action), messages.map(() => 'malformed'));
+  assert.deepEqual(run.planned, []);
+  assert.deepEqual(h.calls, []);
+});
+
 test('routing covers every product and alias, strips only the leading product', () => {
   const expected: Record<string, string> = { Inflecto: 'kmdesle/inflecto-ai', Sendinel: 'kmdesle/sendinel-ai', Synchronex: 'kmdesle/synchronex', Tractic: 'tractic-io/tractic-2.0', 'Cyber-Wingman': 'kmdesle/cyber-wingman', CW: 'kmdesle/cyber-wingman', Hashfolio: 'kmdesle/hashfolio', WFI: 'kmdesle/wfi-hyperion', Hyperion: 'kmdesle/wfi-hyperion', Wren: 'kmdesle/wren-app', 'ACT-Now': 'kmdesle/act-now' };
   for (const [prefix, repo] of Object.entries(expected)) assert.deepEqual(routeTitle(`${prefix.toUpperCase()}: Fix ${prefix}`), { repo, title: `[muse] Fix ${prefix}` });
