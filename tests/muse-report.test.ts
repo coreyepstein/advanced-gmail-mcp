@@ -74,6 +74,26 @@ test('zero new preserves known FAIL, closed regression, BLOCKED, and approval da
   assert.deepEqual(calls, []);
 });
 
+test('v1 coverage accepts one final PRs opened trailer with CRLF and rich coverage text', () => {
+  const body = [
+    'MUSE_REPORT_VERSION: 1', `RUN_ID: ${runId}`, 'NEW_FINDINGS: 0', '', 'FINDINGS', '',
+    'REGRESSIONS', '#1 FAIL: first', '#2 FAIL: second', '#3 FAIL: third', '#4 FAIL: fourth',
+    'COVERAGE', 'one | PASS | #2284 (closed; multipliers still 2026-03-15 vs scoring 2026-11)',
+    'two | PASS | - (note text)', '', 'PRs opened: none', '', 'END_MUSE_REPORT', '',
+  ].join('\r\n');
+  const parsed = parseMuseReport(body, subject);
+  assert.deepEqual(parsed?.protocol.errors, []);
+  assert.equal(parsed?.coverage.length, 2);
+  assert.equal(parsed?.regressions.length, 4);
+});
+
+test('unexpected coverage text and duplicate PRs opened trailers fail', () => {
+  const base = zero.replace('END_MUSE_REPORT', 'stray line\nEND_MUSE_REPORT');
+  assert.deepEqual(parseMuseReport(base, subject)?.protocol.errors, ['MALFORMED_COVERAGE']);
+  const duplicate = zero.replace('END_MUSE_REPORT', 'PRs opened: none\n\nPRs opened: none\n\nEND_MUSE_REPORT');
+  assert.deepEqual(parseMuseReport(duplicate, subject)?.protocol.errors, ['MALFORMED_COVERAGE']);
+});
+
 test('N complete new findings roundtrip through existing routing and planning', async () => {
   const findings = [finding, { ...finding, TITLE: 'Inflecto: Export output is blank', ACTUAL: 'No file produced' }];
   const body = formatMuseReportV1({ runId, findings, coverage: [{ cellId: 'save', result: 'FAIL', issueRefs: [] }] });

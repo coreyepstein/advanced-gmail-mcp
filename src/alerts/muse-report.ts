@@ -84,6 +84,15 @@ export function parseMuseReport(body: string, subject?: string): MuseReport | un
   const coverage: MuseCoverage[] = [];
   const cells = new Set<string>();
   while (index < lines.length && lines[index] !== 'END_MUSE_REPORT') {
+    if (/^PRs opened: .+$/i.test(lines[index])) {
+      let next = index + 1;
+      while (lines[next] === '') next++;
+      if (coverage.length && lines[next] === 'END_MUSE_REPORT') {
+        index = next;
+        break;
+      }
+      return fail('MALFORMED_COVERAGE');
+    }
     const match = lines[index++]?.match(/^([a-zA-Z0-9_-]{1,128}) \| (PASS|FAIL|BLOCKED) \| (\S[^|]*)$/);
     if (!match) return fail('MALFORMED_COVERAGE');
     const [, cellId, status, rawRefs] = match;
