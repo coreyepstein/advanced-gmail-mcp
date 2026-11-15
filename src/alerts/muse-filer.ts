@@ -76,9 +76,28 @@ function isCoverageExplanation(lines: string[]): boolean {
   return lines.length > 0;
 }
 
+// The inline report form attaches its existing-issue intro to the verdict.
+// Keep every explanation clause citation-led and explicitly about an existing
+// symptom. One bullet may cover several cells; counts are not bullet counts.
+function isInlineZeroNewFindings(declaration: string, lines: string[]): boolean {
+  const intro = new RegExp(`^none - no new issues found in this run\\. The ${countPattern} failing cells? cite already-open issues \\(see COVERAGE, not re-reported as new findings\\):$`, 'i');
+  if (!intro.test(declaration)) return false;
+  const issue = '#[1-9]\\d*';
+  const symptom = 'existing (?:[a-z-]+ ){0,3}(?:symptom|mismatch|defect|failure|outage)\\.';
+  const bullet = new RegExp(`^[-*] [a-z][a-z0-9 -]* (?:fails? on|(?:is |are )?blocked by) ${issue}(?: \\(closed, symptom persists\\))?: ${symptom}(?: ${issue} also still reproduces: ${symptom})*(?: No external action\\.)?$`, 'i');
+  const ambiguous = /\b(?:new|unfiled|untracked|another|maybe|possibly|not|no|and|but|except|unrelated)\b/i;
+  const explanations = lines.map(line => line.trim()).filter(Boolean);
+  return explanations.length > 0 && explanations.every(line => {
+    // Conjunctions in cell names are fine; symptom prose must stay bounded.
+    const prose = line.slice(line.indexOf(':') + 1).replace(/ No external action\.$/i, '');
+    return bullet.test(line) && !ambiguous.test(prose);
+  });
+}
+
 function hasZeroNewFindings(lines: string[]): boolean {
   const header = /^\s*(?:#{1,6}\s*)?(?:\*\*)?FINDINGS\s*:?\s*(?:\*\*)?\s*$/i;
-  const starts = lines.flatMap((line, index) => header.test(line) ? [index] : []);
+  const inlineHeader = /^\s*(?:#{1,6}\s*)?(?:\*\*)?FINDINGS\s*:\s*(\S.*?)\s*$/i;
+  const starts = lines.flatMap((line, index) => header.test(line) || inlineHeader.test(line) ? [index] : []);
   if (starts.length !== 1) return false;
   const start = starts[0];
   // A quoted/example section cannot establish a report's zero-new verdict.
@@ -87,6 +106,13 @@ function hasZeroNewFindings(lines: string[]): boolean {
   const remaining = lines.slice(start + 1);
   const end = remaining.findIndex(line => boundary.test(line));
   const section = (end < 0 ? remaining : remaining.slice(0, end)).map(line => line.trim());
+  const inline = header.test(lines[start]) ? null : lines[start].match(inlineHeader);
+  if (inline) {
+    // Only a report-leading inline verdict is authoritative, never a later
+    // occurrence inside ordinary prose, notes, a quotation, or an example.
+    return lines.slice(0, start).every(line => !line.trim())
+      && isInlineZeroNewFindings(inline[1], section);
+  }
   // Later paragraphs may only explain existing issues or explicitly unverified coverage.
   const first = section.findIndex(line => line !== '');
   if (first < 0) return false;

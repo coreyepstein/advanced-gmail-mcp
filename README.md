@@ -479,6 +479,14 @@ re-reported as new findings):` followed by bullets that each cite an `#issue`. T
 section ends at `COVERAGE`, `Observations (not findings)`, or `Notes (not findings)`.
 These declarations concern new findings only; FAIL/BLOCKED coverage remains
 unresolved, and finding field blocks always take precedence.
+The report-leading inline form `FINDINGS: none - no new issues found in this run.`
+is accepted when it continues with `The four failing cells cite already-open
+issues (see COVERAGE, not re-reported as new findings):` (other positive counts
+are allowed) and citation-bearing bullets. Each bullet must describe an existing
+symptom, mismatch, defect, failure, or outage; a follow-up such as `#104 also
+still reproduces: existing validation placement defect.` is allowed. One bullet
+may explain several coverage cells. Missing citations, additional defect prose,
+duplicate FINDINGS headers, and quoted/example inline verdicts remain invalid.
 Attachments and HTML-only messages are not parsed; send inline `text/plain`.
 
 Routes (verified with read-only `gh repo view` on November 8, 2026; checked again
