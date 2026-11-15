@@ -44,6 +44,8 @@ const zeroNewReports = [
     'Observations (not findings)', '| Save | FAIL | #101 |', '| Export | FAIL | #102 |', '| Search | FAIL | #103 |'],
   ['## FINDINGS', '(none \u2014 zero findings this run)', '## COVERAGE',
     '| Export | BLOCKED | Existing issue #102 |'],
+  ['FINDINGS', 'None. All 17 brief cells passed; no new defects found.', 'COVERAGE',
+    '| Save | PASS | Synthetic check |'],
 ].map(lines => lines.join('\r\n'));
 const mail = (body: string, id = 'm1', subject = '[Muse] Spec billing 2026-11-08'): Mail => ({ id, body, subject });
 
@@ -191,7 +193,7 @@ test('incidental, quoted, example, contradictory and gibberish declarations stil
   assert.deepEqual(h.marked, messages.map(({ id }) => id));
 });
 
-// Synthetic CRLF copies of three verified real-report shapes (details and IDs invented).
+// Synthetic CRLF report shapes; all details and IDs invented.
 const realShapeReports = {
   literalCase: ['FINDINGS', '', 'None. No new findings this run.', '',
     'Two cells fail against already-open issues (see COVERAGE, not re-reported as new findings):',
@@ -215,6 +217,10 @@ const realShapeReports = {
     'One cell BLOCKED:',
     '- Catalog totals: unable to verify the advertised total of 24 entries. Cannot read the complete counts through capped tool outputs. No mismatch was found. The sample claim is "24 catalog entries". The available output contains "8 entries".', '',
     'COVERAGE', 'login | FAIL | #101', 'export | FAIL | #102', 'catalog totals | BLOCKED | incomplete output'],
+  allPassNotes: ['FINDINGS', 'None. All 17 brief cells passed; no new defects found.', '',
+    'NOTES', '- The synthetic catalog sample contains 9 entries.', '',
+    '- Reference checked: https://reports.example/checks/sample', '',
+    'COVERAGE', 'catalog | PASS | Synthetic sample checked', 'PRs opened: none'],
 };
 const realShape = (lines: string[]) => lines.join('\r\n');
 
@@ -261,7 +267,7 @@ test('real-report shapes still surface findings, malformed blocks and contradict
     swap(second, second[1], '(none \u2014 no new findings this run. The three FAIL cells below cite issues already filed: #101, #102, #103. One is new.)'),
     swap(second, second[1], '(none \u2014 no new findings this run. The three FAIL cells below cite issues already filed: #101, #102, #103.'),
     swap(third, '(none \u2014 zero findings this run)', '(none \u2014 zero findings this run)\r\n\r\nOne new failure remains.'),
-    swap(third, 'Notes (not findings):', 'Notes:'),
+    swap(third, 'Notes (not findings):', 'Notes about this run:'),
     `> ${realShape(first).replace(/\r\n/g, '\r\n> ')}`,
     `Example:\r\n${realShape(third)}`,
   ];
@@ -297,6 +303,66 @@ test('unverified BLOCKED coverage requires all evidence markers and never hides 
   assert.deepEqual(parseEmail(`${body}\r\nRegression verdicts:\r\n${verdicts.join('\r\n')}`), {
     findings: [], regressions: verdicts, nothingFound: true,
   });
+});
+
+test('standalone NOTES bounds explicit zero-new declarations without establishing a verdict itself', () => {
+  for (const declaration of [
+    'None. All 17 brief cells passed; no new defects found.',
+    'None. No new findings this run.',
+    '(none \u2014 zero findings this run)',
+  ]) {
+    for (const heading of ['NOTES', 'Notes:', '## NOTES', '**Notes:**']) {
+      for (const newline of ['\n', '\r\n']) {
+        const body = ['FINDINGS', declaration, '', heading, '- Synthetic run detail.', '',
+          'COVERAGE', 'catalog | PASS | Synthetic check', 'PRs opened: none'].join(newline);
+        assert.deepEqual(parseEmail(body), { findings: [], regressions: [], nothingFound: true });
+        const verdicts = ['#701 FAIL: existing defect remains', '#702 BLOCKED: check unavailable'];
+        assert.deepEqual(parseEmail(`${body}${newline}Regression verdicts:${newline}${verdicts.join(newline)}`), {
+          findings: [], regressions: verdicts, nothingFound: true,
+        });
+        for (const field of ['TITLE', 'REPRO', 'EXPECTED', 'ACTUAL', 'EVIDENCE', 'SEVERITY']) {
+          const withField = body.replace('- Synthetic run detail.', `${field}: Synthetic finding detail`);
+          assert.equal(parseEmail(withField).nothingFound, false);
+          assert.equal(parseEmail(withField).findings.length, 1);
+        }
+      }
+    }
+  }
+});
+
+test('all-pass declarations and NOTES reject incidental, quoted, contradictory and incomplete text', async () => {
+  const declaration = 'None. All 17 brief cells passed; no new defects found.';
+  const bodies = [
+    declaration,
+    `NOTES\n${declaration}\nCOVERAGE`,
+    'FINDINGS\nNone.\n\nNOTES\n- Synthetic detail.\nCOVERAGE',
+    'FINDINGS\nAll 17 brief cells passed.\n\nNOTES\n- None.\nCOVERAGE',
+    'FINDINGS\nNone of the notes mention defects.\nNOTES',
+    `FINDINGS below\n${declaration}\nNOTES`,
+    `> FINDINGS\n> ${declaration}\n> NOTES`,
+    `FINDINGS\n> ${declaration}\nNOTES`,
+    `FINDINGS\n"${declaration}"\nNOTES`,
+    `FINDINGS\nExample: ${declaration}\nNOTES`,
+    `Example:\nFINDINGS\n${declaration}\nNOTES`,
+    `\`\`\`text\nFINDINGS\n${declaration}\nNOTES\n\`\`\``,
+    `FINDINGS\n${declaration} One new defect remains.\nNOTES`,
+    `FINDINGS\n${declaration}\n\nOne new defect remains.\nNOTES`,
+    `FINDINGS\n${declaration}\nNOTES\n- Synthetic detail.\nFINDINGS\nOne new defect remains.`,
+    ...['0', '017', 'seventeen'].map(count => `FINDINGS\n${declaration.replace('17', count)}\nNOTES`),
+    ...[
+      'None. All 17 brief cells passed.',
+      'None. All 17 brief cells passed; no new defects found. Except one.',
+      'None. Some brief cells passed; no new defects found.',
+    ].map(text => `FINDINGS\n${text}\nNOTES`),
+    ...['Notes about this run:', 'NOTES: one new defect remains.', '- NOTES', '> NOTES', 'Notes appear below.']
+      .map(text => `FINDINGS\n${declaration}\n\n${text}\n- Synthetic detail.\nCOVERAGE`),
+  ];
+  for (const body of bodies) assert.equal(parseEmail(body).nothingFound, false, body);
+  const h = harness(bodies.map((body, index) => mail(body, `all-pass-ambiguous-${index}`)));
+  const run = await h.run();
+  assert.deepEqual(run.results.map(({ action }) => action), bodies.map(() => 'malformed'));
+  assert.deepEqual(run.planned, []);
+  assert.deepEqual(h.calls, []);
 });
 
 test('routing covers every product and alias, strips only the leading product', () => {
