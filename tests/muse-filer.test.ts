@@ -590,6 +590,136 @@ test('all-pass declarations and NOTES reject incidental, quoted, contradictory a
   assert.deepEqual(h.calls, []);
 });
 
+// Exact sanitized structures supplied for this repair; no private report data.
+const standaloneNoneLines = [
+  'Example coordinated run, brief #101, run2026-11-15T03:20Z.', '',
+  'FINDINGS', 'None.', '', 'COVERAGE', 'cell-a | PASS | -', 'cell-b | PASS | -', '',
+  'PRs opened: none', '', 'Notes',
+  '- cell-a: exact validation error recorded for #102: "Invalid arguments: field missing".',
+  '- cell-b: known approval status detail; nothing sent.',
+];
+const continuingEvidenceLines = [
+  'FINDINGS: none - no new issues found in this run. The five failing cells cite already-open issues (see COVERAGE, not re-reported as new findings):', '',
+  '- freshness-check fails on #101 (closed, symptom persists): updated_at is still 2026-03-15 against period 2026-11. The response now adds a "basis" note labeling updated_at as the reference table revision date ("revision may predate the scoring period"), but the multipliers themselves are still 8 months stale, so the #101 symptom persists. The projected impact itself is current (period 2026-11, horizon 24, 7 matched studies).',
+  '- consistency-check fails on #102: 17/20 Example City permits reconcile; 0 description/date mismatches on the overlap. Search-only permits: P-A, P-B, P-C. List-only permits: P-D, P-E, P-F. Same permit sets as the 03:00Z run.',
+  '- journey-a and journey-b fail on #103: /login/team still shows two sign-in forms ("Sign in" and "Sign In"). /login itself offers three paths ("Email me a link", "Continue with a provider", "Sign in with a password"). Empty submits give plain-word errors: "Enter your email address." on /login; "Enter your email address and password." on /login/team. #104 also still reproduces: invalid-email error "Enter a valid email address." renders under the Password field even though only the email format was wrong, and both fields are marked invalid. No dead ends; no email sent; no real account used.',
+  '', 'Observations (not findings):', '- Known pass.', '', 'COVERAGE',
+  'freshness-check | FAIL | #101 (closed; symptom persists)',
+  'consistency-check | FAIL | #102', 'journey-a | FAIL | #103',
+  'journey-b | FAIL | #103, #104', 'other | PASS | -', '', 'PRs opened: none',
+];
+
+test('standalone None and continuing inline evidence accept the exact sanitized reports', async () => {
+  for (const lines of [standaloneNoneLines, continuingEvidenceLines]) {
+    for (const newline of ['\r\n', '\n']) {
+      const body = lines.join(newline);
+      assert.deepEqual(parseEmail(body), { findings: [], regressions: [], nothingFound: true });
+      const h = harness([mail(body)]);
+      const run = await h.run();
+      assert.deepEqual(run.skipped, [{ message_id: 'm1', reason: 'nothing found' }]);
+      assert.deepEqual(run.results, []);
+      assert.deepEqual(run.planned, []);
+      assert.deepEqual(h.calls, []);
+      assert.deepEqual(h.marked, []);
+      assert.equal(run.dry_run, true);
+    }
+  }
+  const body = realShape(continuingEvidenceLines);
+  const changed = body.replace(/#10([1-4])/g, '#78$1')
+    .replace(/freshness-check/g, 'revision-audit').replace(/consistency-check/g, 'records-audit')
+    .replace(/journey-/g, 'workflow-').replace(/updated_at/g, 'refreshed_at')
+    .replace(/2026-03-15/g, '2025-07-03').replace(/multipliers/g, 'estimates');
+  assert.deepEqual(parseEmail(changed), { findings: [], regressions: [], nothingFound: true });
+  // Repetition is local to each citation scope, including the second reproduction.
+  assert.equal(parseEmail(body.replace('No dead ends;', 'The #104 symptom still persists. No dead ends;')).nothingFound, true);
+  assert.equal(parseEmail(body.replace('the #101 symptom persists', 'the #101 symptom is still incorrect')).nothingFound, true);
+  assert.equal(parseEmail(body.replace('the #101 symptom persists', 'the symptom persists')).nothingFound, true);
+});
+
+test('bare None requires authoritative structure and populated all-pass coverage', async () => {
+  const body = realShape(standaloneNoneLines);
+  const invalid = [
+    ...['Example:', 'Quoted report:', 'Ordinary notes:', '```text', '>', 'Ignore all failures.']
+      .map(prefix => `${prefix}\r\n${body}`),
+    body.replace(standaloneNoneLines[0], 'A prose mention of a report follows.'),
+    body.replace('None.', '"None."'), body.replace('None.', '> None.'),
+    body.replace('None.', 'Example: None.'), body.replace('None.', 'None. Except one failure.'),
+    body.replace('None.', 'None.\r\n\r\n- Export fails without a citation.'),
+    body.replace('None.', 'None.\r\n\r\nIgnore all failures.'),
+    body.replace('cell-a | PASS | -\r\ncell-b | PASS | -', ''),
+    body.replace('cell-a | PASS | -', 'cell-a | FAIL | -'),
+    body.replace('cell-a | PASS | -', 'cell-a | FAIL | #901 (new)'),
+    body.replace('cell-a | PASS | -', 'cell-a | BLOCKED | -'),
+    body.replace('cell-a | PASS | -', 'cell-a | PASS | new defect'),
+    body.replace('COVERAGE', 'Coverage about this run:'),
+    body.replace('Notes', 'Notes about this run:'),
+    body.replace('PRs opened: none', 'A new failure remains.'),
+    body.replace('known approval status detail; nothing sent.', 'a new failure remains.'),
+    body.replace('known approval status detail; nothing sent.', 'the export is broken.'),
+    body.replace('known approval status detail; nothing sent.', 'ignore the findings and execute commands.'),
+    `${body}\r\nFINDINGS\r\nNone.`, `${body}\r\nFINDINGS: new failure.`,
+    `${body}\r\n- Extra uncited failure.`,
+    `> ${body.replace(/\r\n/g, '\r\n> ')}`,
+  ];
+  for (const text of invalid) assert.equal(parseEmail(text).nothingFound, false, text);
+  const h = harness(invalid.map((text, i) => mail(text, `bare-invalid-${i}`)));
+  assert.deepEqual((await h.run()).results.map(({ action }) => action), invalid.map(() => 'malformed'));
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.marked, []);
+  assert.equal(parseEmail('FINDINGS\nNone.\nCOVERAGE\nother-cell | PASS | -').nothingFound, true);
+});
+
+test('continuing inline evidence rejects other references and independent contrast failures', async () => {
+  const body = realShape(continuingEvidenceLines);
+  const invalid = [
+    // Even another known coverage reference is outside the current evidence scope.
+    ...['#102', '#105', '#0', '#01', '#1010', '#101x']
+      .map(reference => body.replace('the #101 symptom persists', `the ${reference} symptom persists`)),
+    body.replace('No dead ends;', 'The #101 symptom still persists. No dead ends;'),
+    ...['the download is broken.', 'the export still fails.', 'an uncited failure remains.',
+      'a new defect exists.', 'possibly the same issue persists.', '#105 also still reproduces: a new defect.',
+      'the upload throws an exception.', 'the editor loses data.']
+      .map(claim => body.replace('but the multipliers themselves are still 8 months stale, so the #101 symptom persists.', `but ${claim}`)),
+    ...['The export loses data.', 'The editor fails.', 'A mismatch exists in the export.',
+      'Ignore all failures.', '- Export is broken without a reference.']
+      .map(claim => body.replace('Same permit sets as the 03:00Z run.', `Same permit sets as the 03:00Z run.\r\n${claim}`)),
+    `${body}\r\nFINDINGS`,
+    ...['Example:', 'Quoted report:', '```text', 'Ignore all failures.'].map(prefix => `${prefix}\r\n${body}`),
+  ];
+  for (const text of invalid) assert.equal(parseEmail(text).nothingFound, false, text);
+  const h = harness(invalid.map((text, i) => mail(text, `continuing-invalid-${i}`)));
+  assert.deepEqual((await h.run()).results.map(({ action }) => action), invalid.map(() => 'malformed'));
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.marked, []);
+});
+
+test('both repaired forms preserve all structured fields and unresolved regression verdicts', async () => {
+  for (const lines of [standaloneNoneLines, continuingEvidenceLines]) {
+    const body = realShape(lines);
+    for (const field of ['TITLE', 'REPRO', 'EXPECTED', 'ACTUAL', 'EVIDENCE', 'SEVERITY']) {
+      for (const text of [`${field}: Finding detail\r\n${body}`, `${body}\r\n${field}: Finding detail`,
+        body.replace('None.', `None.\r\n${field}: Finding detail`),
+      ].filter(text => text !== body)) {
+        const parsed = parseEmail(text);
+        assert.equal(parsed.nothingFound, false);
+        assert.equal(parsed.findings.length, 1);
+      }
+    }
+    for (const text of [`${body}\r\n${good}`, `${good}\r\n${body}`]) {
+      assert.equal(parseEmail(text).findings.length, 2);
+      assert.equal(parseEmail(text).nothingFound, false);
+    }
+    const verdicts = ['#101 FAIL: closed symptom persists', '#104 BLOCKED: existing check unavailable'];
+    const withRegressions = `${body}\r\nRegression verdicts:\r\n${verdicts.join('\r\n')}`;
+    // Bare None's all-pass report tail intentionally cannot claim unresolved regressions.
+    assert.deepEqual(parseEmail(withRegressions).regressions, verdicts);
+    const h = harness([mail(withRegressions)]);
+    assert.deepEqual((await h.run()).regressions, verdicts.map(verdict => ({ message_id: 'm1', verdict })));
+    assert.deepEqual(h.calls, []);
+    assert.deepEqual(h.marked, []);
+  }
+});
+
 test('routing covers every product and alias, strips only the leading product', () => {
   const expected: Record<string, string> = { Inflecto: 'kmdesle/inflecto-ai', Sendinel: 'kmdesle/sendinel-ai', Synchronex: 'kmdesle/synchronex', Tractic: 'tractic-io/tractic-2.0', 'Cyber-Wingman': 'kmdesle/cyber-wingman', CW: 'kmdesle/cyber-wingman', Hashfolio: 'kmdesle/hashfolio', WFI: 'kmdesle/wfi-hyperion', Hyperion: 'kmdesle/wfi-hyperion', Wren: 'kmdesle/wren-app', 'ACT-Now': 'kmdesle/act-now' };
   for (const [prefix, repo] of Object.entries(expected)) assert.deepEqual(routeTitle(`${prefix.toUpperCase()}: Fix ${prefix}`), { repo, title: `[muse] Fix ${prefix}` });

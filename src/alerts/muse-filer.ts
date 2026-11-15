@@ -31,6 +31,7 @@ function countValue(word: string): number {
 function isZeroNewDeclaration(text: string): boolean {
   const cite = ` The (${countPattern}) FAIL cells? below cites? issues? already filed: (#[1-9]\\d*(?:, #[1-9]\\d*)*)\\.`;
   const forms = [
+    /^None\.$/i,
     new RegExp(`^None\\. No new findings this run\\.?$`, 'i'),
     /^None\. All [1-9]\d* brief cells passed; no new defects found\.$/i,
     new RegExp(`^\\(none\\) \u2014 (?:zero(?: new)?|no new) findings this run(?:\\.?|\\.${cite})$`, 'i'),
@@ -83,26 +84,64 @@ function isInlineZeroNewFindings(declaration: string, lines: string[]): boolean 
   const intro = new RegExp(`^none - no new issues found in this run\\. The ${countPattern} failing cells? cite already-open issues \\(see COVERAGE, not re-reported as new findings\\):$`, 'i');
   if (!intro.test(declaration)) return false;
   const issue = '#[1-9]\\d*';
-  const bullet = new RegExp(`^[-*] [a-z][a-z0-9 -]* (?:fails? on|(?:is |are )?blocked by) ${issue}(?: \\(closed, symptom persists\\))?: (\\S.*)$`, 'i');
-  const reproduction = new RegExp(` ${issue} also still reproduces: `, 'i');
-  const ambiguous = /\b(?:new|unfiled|untracked|uncited|unreported|another|also|maybe|possibly|unrelated|not (?:yet )?filed|except|however|but)\b|\b(?:additional|separate|different) (?:issue|defect|bug|failure)\b/i;
+  const bullet = new RegExp(`^[-*] [a-z][a-z0-9 -]* (?:fails? on|(?:is |are )?blocked by) (${issue})(?: \\(closed, symptom persists\\))?: (\\S.*)$`, 'i');
+  const reproduction = new RegExp(` (${issue}) also still reproduces: `, 'i');
+  const ambiguous = /\b(?:new|unfiled|untracked|uncited|unreported|another|also|maybe|possibly|unrelated|not (?:yet )?filed|except|however)\b|\b(?:additional|separate|different) (?:issue|defect|bug|failure)\b/i;
   const defect = /\b(?:defects?|bugs?|fails?|failed|failing|failures?|broken|wrong|incorrect|mismatch(?:es)?|los(?:e|es|t|ing) (?:data|edits|changes)|data loss|throws? (?:an? )?(?:error|exception))\b/i;
   const continuation = /\b(?:existing|still|same|remains?|continues?|persists?)\b|^(?:these|those|both|it|its|no|zero|0)\b/i;
   const explanations = lines.map(line => line.trim()).filter(Boolean);
   return explanations.length > 0 && explanations.every(line => {
     const match = line.match(bullet);
     if (!match) return false;
-    return match[1].split(reproduction).every(prose => {
+    const scopes = [match[1], ...match[2].split(reproduction)];
+    for (let index = 0; index < scopes.length; index += 2) {
+      const reference = scopes[index];
+      const prose = scopes[index + 1];
       // A citation covers ordinary evidence prose, not a claim of a new issue
       // or an uncited second reproduction. No email text is ever executed.
-      if (!prose.trim() || ambiguous.test(prose) || /#\d|\balso still reproduces\b/i.test(prose)) return false;
+      if (!prose.trim() || ambiguous.test(prose) || /\balso still reproduces\b/i.test(prose)) return false;
+      // Repeating this scope's citation is evidence, not a second finding.
+      // A different reference needs its own explicit reproduction scope.
+      const scopedReference = new RegExp(`${reference}\\b`, 'g');
+      if (/#\d/.test(prose.replace(scopedReference, ''))) return false;
       // UI message punctuation is data, not a new narrative assertion.
-      const clauses = prose.replace(/"[^"\n]*"|“[^”\n]*”/g, '""').split(/(?<=[.!?])\s+|;\s*|\s+(?:and|but)\s+/i);
+      const narrative = prose.replace(/"[^"\n]*"|“[^”\n]*”/g, '""');
+      // A contrast can continue the current symptom, but cannot introduce an
+      // independent defect just by adding a word such as "still".
+      for (const contrast of narrative.split(/\s+but\s+/i).slice(1)) {
+        const clause = contrast.split(/(?<=[.!?])\s+|;\s*|\s+and\s+/i)[0];
+        if (defect.test(clause) && !clause.match(scopedReference)
+          && !/^(?:these|those|both|it|its|no|zero|0)\b/i.test(clause)) return false;
+      }
+      const clauses = narrative.split(/(?<=[.!?])\s+|;\s*|\s+(?:and|but)\s+/i);
       // A later independent defect assertion needs a citation of its own;
       // continuing evidence and explicit negative observations stay in scope.
-      return clauses.every((clause, index) => index === 0 || !defect.test(clause) || continuation.test(clause));
-    });
+      if (!clauses.every((clause, index) => index === 0 || !defect.test(clause) || continuation.test(clause))) return false;
+    }
+    return true;
   });
+}
+
+// A bare verdict carries less evidence than an explicit zero-new declaration.
+// Accept only a report-leading section (or a single run metadata line), an
+// immediate, populated all-PASS table, and a bounded ordinary report tail.
+function isBareNoneReport(before: string[], after: string[]): boolean {
+  const preamble = before.map(line => line.trim()).filter(Boolean);
+  if (preamble.length && (preamble.length !== 1
+    || !/^[\w -]+, brief #[1-9]\d*, run\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\.$/i.test(preamble[0]))) return false;
+  const tail = after.map(line => line.trim()).filter(Boolean);
+  if (!/^(?:#{1,6}\s*)?(?:\*\*)?COVERAGE\s*:?\s*(?:\*\*)?$/i.test(tail.shift() ?? '')) return false;
+  let rows = 0;
+  while (tail[0]?.includes('|')) {
+    if (!/^\|?\s*[^|]+\s*\|\s*PASS\s*\|\s*-\s*\|?$/i.test(tail.shift()!)) return false;
+    rows++;
+  }
+  if (!rows) return false;
+  if (/^PRs opened: none$/i.test(tail[0] ?? '')) tail.shift();
+  if (!tail.length) return true;
+  if (!/^(?:#{1,6}\s*)?(?:\*\*)?Notes\s*:?\s*(?:\*\*)?$/i.test(tail.shift()!)) return false;
+  return tail.every(line => /^[-*] [a-z][a-z0-9 -]*: \S/i.test(line)
+    && !/\b(?:new|unfiled|untracked|uncited|unreported|another|also|maybe|possibly|except|however|but|defects?|bugs?|fails?|failed|failing|failures?|broken|wrong|incorrect|mismatches|ignore|execute|suppress)\b/i.test(line.replace(/"[^"\n]*"|“[^”\n]*”/g, '')));
 }
 
 function hasZeroNewFindings(lines: string[]): boolean {
@@ -131,6 +170,8 @@ function hasZeroNewFindings(lines: string[]): boolean {
   const head = (gap < 0 ? section.slice(first) : section.slice(first, gap)).join(' ').replace(/\s+/g, ' ');
   if (!isZeroNewDeclaration(head)) return false;
   const rest = gap < 0 ? [] : section.slice(gap).filter(line => line !== '');
+  if (/^None\.$/i.test(head)) return !rest.length && end >= 0
+    && isBareNoneReport(lines.slice(0, start), remaining.slice(end));
   return !rest.length || isCoverageExplanation(rest);
 }
 
