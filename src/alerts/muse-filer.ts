@@ -32,6 +32,7 @@ function isZeroNewDeclaration(text: string): boolean {
   const cite = ` The (${countPattern}) FAIL cells? below cites? issues? already filed: (#[1-9]\\d*(?:, #[1-9]\\d*)*)\\.`;
   const forms = [
     new RegExp(`^None\\. No new findings this run\\.?$`, 'i'),
+    /^None\. All [1-9]\d* brief cells passed; no new defects found\.$/i,
     new RegExp(`^\\(none\\) \u2014 (?:zero(?: new)?|no new) findings this run(?:\\.?|\\.${cite})$`, 'i'),
     new RegExp(`^\\(none \u2014 (?:zero(?: new)?|no new) findings this run(?:\\.?|\\.${cite})\\)\\.?$`, 'i'),
   ];
@@ -82,7 +83,7 @@ function hasZeroNewFindings(lines: string[]): boolean {
   const start = starts[0];
   // A quoted/example section cannot establish a report's zero-new verdict.
   if (lines.slice(0, start).some(line => /^\s*(?:>|`{3,}|~{3,}|(?:for example|examples?|quotes?|quoted (?:report|text))\s*:)/i.test(line))) return false;
-  const boundary = /^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:COVERAGE|(?:Observations|Notes)\s+\(not findings\)|Observations|regression(?:s| verdicts?| results?)?)\s*:?\s*(?:\*\*)?\s*$/i;
+  const boundary = /^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:COVERAGE|(?:Observations|Notes)\s+\(not findings\)|Observations|Notes|regression(?:s| verdicts?| results?)?)\s*:?\s*(?:\*\*)?\s*$/i;
   const remaining = lines.slice(start + 1);
   const end = remaining.findIndex(line => boundary.test(line));
   const section = (end < 0 ? remaining : remaining.slice(0, end)).map(line => line.trim());
