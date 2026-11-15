@@ -19,6 +19,22 @@ export const routes: Record<string, string> = {
   wren: 'kmdesle/wren-app', 'act-now': 'kmdesle/act-now',
 };
 
+function hasZeroNewFindings(lines: string[]): boolean {
+  const header = /^\s*(?:#{1,6}\s*)?(?:\*\*)?FINDINGS\s*:?\s*(?:\*\*)?\s*$/i;
+  const starts = lines.flatMap((line, index) => header.test(line) ? [index] : []);
+  if (starts.length !== 1) return false;
+  const start = starts[0];
+  // A quoted/example section cannot establish a report's zero-new verdict.
+  if (lines.slice(0, start).some(line => /^\s*(?:>|`{3,}|~{3,}|(?:for example|examples?|quotes?|quoted (?:report|text))\s*:)/i.test(line))) return false;
+  const boundary = /^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:COVERAGE|Observations(?:\s+\(not findings\))?|regression(?:s| verdicts?| results?)?)\s*:?\s*(?:\*\*)?\s*$/i;
+  const remaining = lines.slice(start + 1);
+  const end = remaining.findIndex(line => boundary.test(line));
+  const section = (end < 0 ? remaining : remaining.slice(0, end)).join(' ').replace(/\s+/g, ' ').trim();
+  // Only this bounded existing-issue explanation may accompany a declaration.
+  const declaration = section.replace(/ The (?:three|3) FAIL cells below cite issues already filed: #[1-9]\d*, #[1-9]\d*, #[1-9]\d*\.$/i, '');
+  return /^(?:None\. No new findings this run\.?|\(none\) \u2014 (?:zero(?: new)?|no new) findings this run\.?|\(none \u2014 (?:zero(?: new)?|no new) findings this run\.?\)\.?)$/i.test(declaration);
+}
+
 // A line grammar only. Email text never becomes code, commands, or instructions.
 export function parseEmail(body: string): { findings: Finding[]; regressions: string[]; nothingFound: boolean } {
   const findings: Finding[] = [];
@@ -26,7 +42,8 @@ export function parseEmail(body: string): { findings: Finding[]; regressions: st
   let current: Finding | undefined;
   let field: Field | undefined;
   let regressionSection = false;
-  for (const line of body.replace(/\r\n/g, '\n').split('\n')) {
+  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  for (const line of lines) {
     if (/^\s*(?:#{1,6}\s*)?(?:\*\*)?regression(?:s| verdicts?| results?)?\s*:?\s*(?:\*\*)?\s*$/i.test(line)) {
       regressionSection = true;
       field = undefined;
@@ -48,7 +65,7 @@ export function parseEmail(body: string): { findings: Finding[]; regressions: st
     }
   }
   for (const finding of findings) for (const key of fields) if (finding[key] !== undefined) finding[key] = finding[key]!.trim();
-  return { findings, regressions, nothingFound: !findings.length && /\bnothing found\b/i.test(body) };
+  return { findings, regressions, nothingFound: !findings.length && (/\bnothing found\b/i.test(body) || hasZeroNewFindings(lines)) };
 }
 
 export function routeTitle(title: string, subject?: string): { repo: string; title: string } | undefined {

@@ -469,7 +469,12 @@ Field names are uppercase and start their own lines. `TITLE` is one line; other
 fields continue until the next field name. `SEVERITY` is `wrong number`, `broken`,
 `confusing`, or `cosmetic`. A separate `Regression verdicts:` section contains
 one verdict per line with an existing `#issue` number; these lines are logged,
-never filed. For a clean test, use `Nothing found.` instead of finding blocks.
+never filed. Reports with no new findings may use `Nothing found.` or a standalone
+`FINDINGS` header followed by `None. No new findings this run.`. Bounded forms
+using `(none)`, U+2014, and `zero findings this run` or `no new findings this run`
+are also accepted, including the three-issue explanation of existing FAIL cells.
+These declarations concern new findings only; FAIL/BLOCKED coverage remains
+unresolved, and finding field blocks always take precedence.
 Attachments and HTML-only messages are not parsed; send inline `text/plain`.
 
 Routes (verified with read-only `gh repo view` on November 8, 2026; checked again

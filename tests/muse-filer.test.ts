@@ -34,6 +34,17 @@ ACTUAL: Wrong total
 SEVERITY: wrong number`;
 const regressions = `${good}\n\nRegression verdicts:\n#123 PASS: previous save fix works\n#456 FAIL: total remains broken`;
 const nothing = 'Nothing found.\nRegression verdicts:\n#789 PASS';
+// Synthetic CRLF reports only. Coverage failures describe existing issues.
+const zeroNewReports = [
+  ['FINDINGS', '', 'None. No new findings this run.', 'COVERAGE',
+    '| Save | FAIL | Existing issue #101 |', '| Export | BLOCKED | Existing issue #102 |'],
+  ['FINDINGS', '(none) \u2014 zero findings this run', 'COVERAGE',
+    '| Save | FAIL | Existing issue #101 |'],
+  ['FINDINGS', '(none) \u2014 no new findings this run. The three FAIL cells below cite issues already filed: #101, #102, #103.',
+    'Observations (not findings)', '| Save | FAIL | #101 |', '| Export | FAIL | #102 |', '| Search | FAIL | #103 |'],
+  ['## FINDINGS', '(none \u2014 zero findings this run)', '## COVERAGE',
+    '| Export | BLOCKED | Existing issue #102 |'],
+].map(lines => lines.join('\r\n'));
 const mail = (body: string, id = 'm1', subject = '[Muse] Spec billing 2026-11-08'): Mail => ({ id, body, subject });
 
 function harness(messages: Mail[], opts: { apply?: boolean; explain?: boolean; issues?: Issue[]; recovery?: Issue[]; labels?: string[]; failCreate?: number } = {}) {
@@ -77,6 +88,107 @@ test('six fixtures: parser preserves multiline fields, isolates regression verdi
   assert.equal(parsed.findings[1].SEVERITY, 'broken');
   assert.equal(parseEmail(nothing).nothingFound, true);
   assert.equal(parseEmail(nothing).findings.length, 0);
+});
+
+test('bounded zero-new FINDINGS declarations stay quiet despite FAIL/BLOCKED coverage', async () => {
+  for (const body of zeroNewReports) {
+    assert.deepEqual(parseEmail(body), { findings: [], regressions: [], nothingFound: true });
+  }
+  const messages = zeroNewReports.map((body, index) => mail(body, `zero-${index}`));
+  const h = harness(messages, { apply: true });
+  const run = await h.run();
+  assert.deepEqual(run.results, []);
+  assert.deepEqual(run.planned, []);
+  assert.deepEqual(run.regressions, []);
+  assert.deepEqual(run.skipped, messages.map(({ id }) => ({ message_id: id, reason: 'nothing found' })));
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.marked, messages.map(({ id }) => id));
+});
+
+test('zero-new declarations preserve regression verdicts without treating failures as passes', async () => {
+  const verdicts = ['#101 FAIL: existing failure remains', '#102 BLOCKED: existing check unavailable'];
+  const body = `${zeroNewReports[2]}\r\nRegression verdicts:\r\n${verdicts.join('\r\n')}`;
+  assert.deepEqual(parseEmail(body), { findings: [], regressions: verdicts, nothingFound: true });
+  const h = harness([mail(body), mail(`Regression verdicts:\r\n${verdicts.join('\r\n')}`, 'reg-only')], { apply: true });
+  const run = await h.run();
+  assert.deepEqual(run.regressions, ['m1', 'reg-only'].flatMap(message_id => verdicts.map(verdict => ({ message_id, verdict }))));
+  assert.deepEqual(run.results, []);
+  assert.deepEqual(run.planned, []);
+  assert.deepEqual(run.skipped.map(({ reason }) => reason), ['nothing found', 'regressions only']);
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.marked, ['m1', 'reg-only']);
+});
+
+test('actual finding blocks take precedence over zero-new declarations and retain dedup', async () => {
+  const finding = 'TITLE: Wren: Save ignores edits\r\nREPRO: Edit and save\r\nACTUAL: Edits are lost; the message says "none"';
+  for (const report of [...zeroNewReports, nothing.replace(/\n/g, '\r\n')]) {
+    for (const body of [`${report}\r\n${finding}`, `${finding}\r\n${report}`]) {
+      assert.equal(parseEmail(body).nothingFound, false);
+      const run = await harness([mail(body)]).run();
+      assert.equal(run.planned.length, 1);
+      assert.equal(run.planned[0].title, '[muse] Save ignores edits');
+    }
+  }
+  const h = harness([mail(`${zeroNewReports[0]}\r\n${finding}`)], {
+    apply: true, issues: [{ number: 42, title: '[muse] Save ignores edits' }],
+  });
+  assert.deepEqual((await h.run()).results.map(({ action, issue }) => [action, issue]), [['duplicate', 42]]);
+  assert.equal(h.calls.some(args => args[1] === 'create'), false);
+  assert.deepEqual(h.marked, ['m1']);
+});
+
+test('malformed field blocks remain visible alongside every zero-new form and legacy phrase', async () => {
+  const blocks = [
+    'TITLE: Wren: Missing reproduction\r\nACTUAL: None of the edits persist',
+    'REPRO: Open editor\r\nACTUAL: Edits are lost',
+    'EXPECTED: None of the edits should be lost',
+    'TITLE:\r\nREPRO: Open editor\r\nACTUAL: Edits are lost',
+    'TITLE: Wren: Broken save\r\nExtra title line\r\nREPRO: Save\r\nACTUAL: Edits are lost',
+  ];
+  for (const report of [...zeroNewReports, nothing.replace(/\n/g, '\r\n')]) {
+    for (const block of blocks) {
+      const body = `${report}\r\n${block}`;
+      assert.equal(parseEmail(body).nothingFound, false);
+      const h = harness([mail(body)], { apply: true });
+      const run = await h.run();
+      assert.deepEqual(run.results.map(({ action }) => action), ['malformed']);
+      assert.deepEqual(run.planned, []);
+      assert.deepEqual(h.calls, []);
+      assert.deepEqual(h.marked, ['m1']);
+    }
+  }
+});
+
+test('incidental, quoted, example, contradictory and gibberish declarations still warn', async () => {
+  const declaration = 'None. No new findings this run.';
+  const bodies = [
+    'Unstructured gibberish',
+    declaration,
+    `The findings below are examples.\r\n${declaration}`,
+    `FINDINGS below\r\n${declaration}`,
+    `COVERAGE\r\n${declaration}`,
+    'FINDINGS\r\nNone.',
+    'FINDINGS\r\n(none)',
+    'FINDINGS\r\nNo result available; none confirmed.',
+    `FINDINGS\r\n"${declaration}"`,
+    `> FINDINGS\r\n> ${declaration}`,
+    `FINDINGS\r\n> ${declaration}`,
+    `FINDINGS\r\nExample: ${declaration}`,
+    `Example:\r\nFINDINGS\r\n${declaration}`,
+    `\`\`\`text\r\nFINDINGS\r\n${declaration}\r\nCOVERAGE\r\n\`\`\``,
+    `FINDINGS\r\n${declaration}\r\nMaybe a new failure remains.\r\nCOVERAGE`,
+    `FINDINGS\r\n${declaration} One new finding remains.\r\nCOVERAGE`,
+    `FINDINGS\r\n${declaration}\r\nCOVERAGE\r\nFINDINGS\r\nOne new finding remains.`,
+    'FINDINGS\r\n(none) \u2014 no new findings this run. The three FAIL cells below cite issues already filed: #101, #102, #103. A new failure also exists.\r\nObservations (not findings)',
+  ];
+  for (const body of bodies) assert.equal(parseEmail(body).nothingFound, false, body);
+  const messages = bodies.map((body, index) => mail(body, `ambiguous-${index}`));
+  const h = harness(messages, { apply: true });
+  const run = await h.run();
+  assert.deepEqual(run.results.map(({ message_id, action }) => [message_id, action]), messages.map(({ id }) => [id, 'malformed']));
+  assert.deepEqual(run.planned, []);
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.marked, messages.map(({ id }) => id));
 });
 
 test('routing covers every product and alias, strips only the leading product', () => {
