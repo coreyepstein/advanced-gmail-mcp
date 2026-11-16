@@ -1,0 +1,42 @@
+[
+  {
+    "id": "1a1e54c5bfb158e2",
+    "subject": "[Muse] Spec Inflecto 2026-11-15T07:50:02.527Z",
+    "body": "MUSE_REPORT_VERSION: 1\r\nRUN_ID: 2026-11-15T07:50:02.527Z\r\nNEW_FINDINGS: 0\r\n\r\nFINDINGS\r\n\r\nCOVERAGE\r\nno cells attempted — no open muse-brief found. The only muse-brief issue (#2315, Run ID 2026-11-15T07:50:02.527Z) was closed 2026-11-16T08:04:31Z (22:04 HST 2026-11-15) as not_planned. No cells were run and no findings are reported.\r\n\r\nPRs opened: none\r\n\r\nEND_MUSE_REPORT"
+  },
+  {
+    "id": "1a1e514444d9257c",
+    "subject": "[Muse] Spec Inflecto 2026-11-15T07:50:02.527Z",
+    "body": "MUSE_REPORT_VERSION: 1\r\nRUN_ID: 2026-11-15T07:50:02.527Z\r\nNEW_FINDINGS: 0\r\n\r\nFINDINGS\r\n\r\nCOVERAGE\r\nno cells attempted — no open muse-brief found. The only muse-brief issue (#2315, Run ID 2026-11-15T07:50:02.527Z) was closed 2026-11-16T08:04:31Z (22:04 HST 2026-11-15) as not_planned. No cells were run and no findings are reported.\r\n\r\nPRs opened: none\r\n\r\nEND_MUSE_REPORT"
+  },
+  {
+    "id": "1a1e4de6320f7f14",
+    "subject": "[Muse] Spec Inflecto 2026-11-15T07:50:02.527Z",
+    "body": "MUSE_REPORT_VERSION: 1\r\nRUN_ID: 2026-11-15T07:50:02.527Z\r\nNEW_FINDINGS: 0\r\n\r\nFINDINGS\r\n\r\nCOVERAGE\r\nno cells attempted — no open muse-brief found. The only muse-brief issue (#2315, Run ID 2026-11-15T07:50:02.527Z) was closed 2026-11-16T08:04:31Z (22:04 HST 2026-11-15) as not_planned. No cells were run and no findings are reported.\r\n\r\nPRs opened: none\r\n\r\nEND_MUSE_REPORT"
+  },
+  {
+    "id": "1a1e4a68c11f8674",
+    "subject": "[Muse] Spec Inflecto 2026-11-15T07:50:02.527Z",
+    "body": "MUSE_REPORT_VERSION: 1\r\nRUN_ID: 2026-11-15T07:50:02.527Z\r\nNEW_FINDINGS: 0\r\n\r\nFINDINGS\r\n\r\nCOVERAGE\r\nno cells attempted — no open muse-brief found. The only muse-brief issue (#2315, Run ID 2026-11-15T07:50:02.527Z) was closed 2026-11-16T08:04:31Z (22:04 HST 2026-11-15) as not_planned. No cells were run and no findings are reported.\r\n\r\nPRs opened: none\r\n\r\nEND_MUSE_REPORT"
+  },
+  {
+    "id": "1a1e46fae902d5cd",
+    "subject": "[Muse] Spec Inflecto 2026-11-15T07:50:02.527Z",
+    "body": "MUSE_REPORT_VERSION: 1\r\nRUN_ID: 2026-11-15T07:50:02.527Z\r\nNEW_FINDINGS: 0\r\n\r\nFINDINGS\r\n\r\nCOVERAGE\r\nno cells attempted — no open muse-brief found. The only muse-brief issue (#2315, Run ID 2026-11-15T07:50:02.527Z) was closed 2026-11-16T08:04:31Z (22:04 HST 2026-11-15) as not_planned. No cells were run and no findings are reported.\r\n\r\nPRs opened: none\r\n\r\nEND_MUSE_REPORT"
+  },
+  {
+    "id": "1a1e437a8dddf26b",
+    "subject": "[Muse] Spec Inflecto — no open brief",
+    "body": "MUSE_REPORT_VERSION: 1\r\nRUN_ID: none (no open brief)\r\nNEW_FINDINGS: 0\r\n\r\nFINDINGS\r\n\r\nCOVERAGE\r\nNo cells attempted: no open muse-brief issue exists in kmdesle/inflecto-ai. The only muse-brief issue, #2315 (Run ID 2026-11-15T07:50:02.527Z), was closed 2026-11-16T08:04:31Z. No new brief has been opened since.\r\n\r\nPRs opened: none\r\nEND_MUSE_REPORT"
+  },
+  {
+    "id": "1a1e40149f1fef73",
+    "subject": "[Muse] Spec Inflecto no-open-brief-2026-11-16",
+    "body": "MUSE_REPORT_VERSION: 1\r\nRUN_ID: no-open-brief-2026-11-16\r\nNEW_FINDINGS: 0\r\n\r\nFINDINGS\r\n\r\nNo open muse-brief issue was found in kmdesle/inflecto-ai at 01:00 HST on 2026-11-16, so no test cells were run in this occurrence.\r\n\r\nThe most recent brief, issue #2315 (Run ID 2026-11-15T07:50:02.527Z, Mode NORMAL), is now CLOSED (last updated 2026-11-16T08:39:14Z). No replacement brief with the muse-brief label is open.\r\n\r\nContext: a backlog consolidation on 2026-11-16 (Kevin click \"All repos tonight\") closed several muse-test issues by merging them into theme issue #2745 (Muse QA findings), including #2263, #2265, #2443, #2689, #2717, #2718, #2719 and #2720. The brief itself appears to have been closed as part of the same consolidation. A new brief will be needed before the next run can test anything.\r\n\r\nCOVERAGE\r\n(no cells attempted - no open brief)\r\n\r\nPRs opened: none\r\n\r\nEND_MUSE_REPORT"
+  },
+  {
+    "id": "1a1e58a2ba4e4829",
+    "subject": "[Muse] Spec Inflecto 2026-11-15T07:50:02.527Z",
+    "body": "MUSE_REPORT_VERSION: 1\r\nRUN_ID: 2026-11-15T07:50:02.527Z\r\nNEW_FINDINGS: 0\r\n\r\nFINDINGS\r\nREGRESSIONS\r\n#2284 FAIL: get_infrastructure_impact cbsa 35620 as_of is scoring_period 2026-11 with multipliers_updated_at 2026-03-15T03:43:48.719Z; multipliers last revised 2026-03-15, eight months before scoring period 2026-11. Issue closed, symptom persists.\r\nCOVERAGE\r\nmcp-get-convergence-score-valid-ny | PASS | -\r\nmcp-search-signals-error-sanitization | PASS | -\r\njourney-j03-login-free | FAIL | #2689\r\njourney-j03-signup-login-pro | FAIL | #2689, #2720\r\nmcp-get-infrastructure-impact-freshness | FAIL | #2284\r\nmcp-search-signals-cross-consistency | FAIL | #2718\r\nmcp-get-opportunities-valid | PASS | -\r\nmcp-get-opportunities-boundary | PASS | -\r\nmcp-search-signals-cold-start-battery-bess | PASS | -\r\nmcp-get-blind-spots-valid-dallas | PASS | -\r\nmcp-get-blind-spots-valid-lacrosse | PASS | -\r\nmcp-get-blind-spots-boundary | PASS | -\r\nmcp-get-convergence-score-cross-consistency | PASS | -\r\nmcp-get-infrastructure-impact-boundary | PASS | -\r\nmcp-get-infrastructure-impact-cross-consistency | PASS | -\r\nmcp-get-location-brief-cold-start-richmond-permits | PASS | -\r\nmcp-get-macro-trends-boundary | PASS | -\r\nmcp-get-macro-trends-error | PASS | -\r\nmcp-get-macro-trends-freshness | PASS | -\r\nmcp-get-macro-trends-cross-consistency | PASS | -\r\nmcp-get-metro-signals-cold-start-substation | PASS | -\r\nmcp-get-opportunities-valid-alert | PASS | -\r\nmcp-get-opportunities-error | PASS | -\r\nPRs opened: none\r\nEND_MUSE_REPORT"
+  }
+]

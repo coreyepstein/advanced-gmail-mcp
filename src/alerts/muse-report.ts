@@ -17,6 +17,16 @@ export interface MuseReport {
 export class MuseProtocolError extends Error {
   constructor(public readonly codes: string[]) { super(`Muse protocol: ${codes.join(', ')}`); }
 }
+function diagnosticLine(value: string): string {
+  return value.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted email]')
+    .replace(/\b(?:Bearer\s+)[A-Za-z0-9._~-]+/gi, 'Bearer [redacted]')
+    .replace(/\b(token|access_token|refresh_token|api[_-]?key)\s*[:=]\s*\S+/gi, '$1=[redacted]')
+    .slice(0, 160);
+}
+function lineMismatch(code: string, lines: string[], index: number, expected: string): string {
+  const got = lines[index] === undefined ? '<end of report>' : JSON.stringify(diagnosticLine(lines[index]));
+  return `${code} (line ${index + 1}: expected ${expected}; got ${got})`;
+}
 function validRunId(value: string): boolean {
   return ISO.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 }
@@ -79,7 +89,8 @@ export function parseMuseReport(body: string, subject?: string): MuseReport | un
     }
     if (!regressions.length) errors.push('EMPTY_REGRESSIONS');
   }
-  if (lines[index++] !== 'COVERAGE') return fail('MISSING_COVERAGE_OR_UNEXPECTED_FIELD');
+  if (lines[index] !== 'COVERAGE') return fail(lineMismatch('MISSING_COVERAGE_OR_UNEXPECTED_FIELD', lines, index, 'COVERAGE section'));
+  index++;
   blanks();
   const coverage: MuseCoverage[] = [];
   const cells = new Set<string>();
@@ -91,10 +102,10 @@ export function parseMuseReport(body: string, subject?: string): MuseReport | un
         index = next;
         break;
       }
-      return fail('MALFORMED_COVERAGE');
+      return fail(lineMismatch('MALFORMED_COVERAGE', lines, index, 'a coverage row; PRs opened trailer is valid only after at least one row'));
     }
     const match = lines[index++]?.match(/^([a-zA-Z0-9_-]{1,128}) \| (PASS|FAIL|BLOCKED) \| (\S[^|]*)$/);
-    if (!match) return fail('MALFORMED_COVERAGE');
+    if (!match) return fail(lineMismatch('MALFORMED_COVERAGE', lines, index - 1, '<cell id> | PASS|FAIL|BLOCKED | <issue refs or reason>'));
     const [, cellId, status, rawRefs] = match;
     if (cells.has(cellId)) errors.push('DUPLICATE_COVERAGE_CELL');
     cells.add(cellId);

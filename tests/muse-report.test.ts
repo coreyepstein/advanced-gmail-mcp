@@ -4,6 +4,7 @@ import { formatMuseReportV1, parseMuseReport, formatMuseReportInstructionsV1, MU
 import { parseEmail, runFiler, gmailAdapter, type Mail, type Run } from '../src/alerts/muse-filer.js';
 import { parseCoverageSection, applyCoverageRecord, generateBriefText, PRODUCTS, type CellLedgerEntry } from '../src/alerts/muse-planner.js';
 import type { gmail_v1 } from 'googleapis';
+import realMuseReports from './fixtures/muse-reports-2026-11-16.json' with { type: 'json' };
 
 const runId = '2026-11-15T01:00:00.000Z';
 const subject = `[Muse] Spec Inflecto ${runId}`;
@@ -89,9 +90,45 @@ test('v1 coverage accepts one final PRs opened trailer with CRLF and rich covera
 
 test('unexpected coverage text and duplicate PRs opened trailers fail', () => {
   const base = zero.replace('END_MUSE_REPORT', 'stray line\nEND_MUSE_REPORT');
-  assert.deepEqual(parseMuseReport(base, subject)?.protocol.errors, ['MALFORMED_COVERAGE']);
+  assert.match(parseMuseReport(base, subject)?.protocol.errors[0] ?? '', /^MALFORMED_COVERAGE \(line 8: expected/);
   const duplicate = zero.replace('END_MUSE_REPORT', 'PRs opened: none\n\nPRs opened: none\n\nEND_MUSE_REPORT');
-  assert.deepEqual(parseMuseReport(duplicate, subject)?.protocol.errors, ['MALFORMED_COVERAGE']);
+  assert.match(parseMuseReport(duplicate, subject)?.protocol.errors[0] ?? '', /^MALFORMED_COVERAGE \(line 8: expected/);
+});
+
+test('real no-open-brief mail remains rejected with the exact bad coverage line', async () => {
+  const expectedIds = [
+    '1a1e54c5bfb158e2', '1a1e514444d9257c', '1a1e4de6320f7f14', '1a1e4a68c11f8674',
+    '1a1e46fae902d5cd', '1a1e437a8dddf26b', '1a1e40149f1fef73',
+  ];
+  assert.deepEqual(realMuseReports.slice(0, 7).map(report => report.id), expectedIds);
+  for (const report of realMuseReports.slice(0, 6)) {
+    const parsed = parseMuseReport(report.body, report.subject);
+    assert.equal(parsed?.protocol.errors.length, 1, report.id);
+    assert.match(parsed?.protocol.errors[0] ?? '', /^MALFORMED_COVERAGE \(line 8: expected <cell id>/, report.id);
+    assert.match(parsed?.protocol.errors[0] ?? '', /no cells attempted|No cells attempted/, report.id);
+  }
+  const surfaced = await consume(realMuseReports[0].body, { subject: realMuseReports[0].subject });
+  assert.match(surfaced.run.results[0].reason ?? '', /line 8: expected <cell id>/);
+  const earlierVariant = realMuseReports[6];
+  const parsed = parseMuseReport(earlierVariant.body, earlierVariant.subject);
+  assert.match(parsed?.protocol.errors[0] ?? '', /^MISSING_COVERAGE_OR_UNEXPECTED_FIELD \(line 7: expected COVERAGE section/);
+  assert.match(parsed?.protocol.errors[0] ?? '', /No open muse-brief issue was found/);
+  assert.doesNotMatch(parsed?.protocol.errors[0] ?? '', /Kevin click/);
+  const reopenedRun = realMuseReports[7];
+  const latest = parseMuseReport(reopenedRun.body, reopenedRun.subject);
+  assert.deepEqual(latest?.protocol.errors, []);
+  assert.deepEqual(latest?.coverage.filter(row => row.result === 'FAIL').map(row => row.cellId), [
+    'journey-j03-login-free',
+    'journey-j03-signup-login-pro',
+    'mcp-get-infrastructure-impact-freshness',
+    'mcp-search-signals-cross-consistency',
+  ]);
+  assert.deepEqual(reopenedRun.body.split('\r\n').filter(line => line.includes(' | FAIL | ')), [
+    'journey-j03-login-free | FAIL | #2689',
+    'journey-j03-signup-login-pro | FAIL | #2689, #2720',
+    'mcp-get-infrastructure-impact-freshness | FAIL | #2284',
+    'mcp-search-signals-cross-consistency | FAIL | #2718',
+  ]);
 });
 
 test('N complete new findings roundtrip through existing routing and planning', async () => {
